@@ -23,7 +23,6 @@ namespace Microsoft.Data.SqlClient.SNI
     internal sealed class SNITCPHandle : SNIPhysicalHandle
     {
         private readonly string _targetServer;
-        private readonly object _callbackObject;
         private readonly object _sendSync;
         private readonly Socket _socket;
         private NetworkStream _tcpStream;
@@ -114,13 +113,11 @@ namespace Microsoft.Data.SqlClient.SNI
         /// <param name="serverName">Server name</param>
         /// <param name="port">TCP port number</param>
         /// <param name="timerExpire">Connection timer expiration</param>
-        /// <param name="callbackObject">Callback object</param>
         /// <param name="parallel">Parallel executions</param>
         /// <param name="cachedFQDN">Key for DNS Cache</param>
         /// <param name="pendingDNSInfo">Used for DNS Cache</param>
-        public SNITCPHandle(string serverName, int port, long timerExpire, object callbackObject, bool parallel, string cachedFQDN, ref SQLDNSInfo pendingDNSInfo)
+        public SNITCPHandle(string serverName, int port, long timerExpire, bool parallel, string cachedFQDN, ref SQLDNSInfo pendingDNSInfo)
         {
-            _callbackObject = callbackObject;
             _targetServer = serverName;
             _sendSync = new object();
 
@@ -217,7 +214,7 @@ namespace Microsoft.Data.SqlClient.SNI
 
                     if (reportError)
                     {
-                        ReportTcpSNIError(0, SNICommon.ConnOpenFailedError, string.Empty);
+                        ReportTcpSNIError(0, SNICommon.ConnOpenFailedError, Strings.SNI_ERROR_40);
                     }
                     return;
                 }
@@ -259,7 +256,7 @@ namespace Microsoft.Data.SqlClient.SNI
             {
                 // Fail if above 64 to match legacy behavior
                 callerReportError = false;
-                ReportTcpSNIError(0, SNICommon.MultiSubnetFailoverWithMoreThan64IPs, string.Empty);
+                ReportTcpSNIError(0, SNICommon.MultiSubnetFailoverWithMoreThan64IPs, Strings.SNI_ERROR_47);
                 return availableSocket;
             }
 
@@ -288,7 +285,7 @@ namespace Microsoft.Data.SqlClient.SNI
             if (!(isInfiniteTimeOut ? connectTask.Wait(-1) : connectTask.Wait(ts)))
             {
                 callerReportError = false;
-                ReportTcpSNIError(0, SNICommon.ConnOpenFailedError, string.Empty);
+                ReportTcpSNIError(0, SNICommon.ConnOpenFailedError, Strings.SNI_ERROR_40);
                 return availableSocket;
             }
 
@@ -364,6 +361,10 @@ namespace Microsoft.Data.SqlClient.SNI
                         if (ipAddresses[i] != null)
                         {
                             sockets[i] = new Socket(ipAddresses[i].AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+
+                            // enable keep-alive on socket
+                            SetKeepAliveValues(ref sockets[i]);
+
                             sockets[i].Connect(ipAddresses[i], port);
                             if (sockets[i] != null) // sockets[i] can be null if cancel callback is executed during connect()
                             {
@@ -640,7 +641,7 @@ namespace Microsoft.Data.SqlClient.SNI
                     else
                     {
                         // otherwise it is timeout for 0 or less than -1
-                        ReportTcpSNIError(0, SNICommon.ConnTimeoutError, string.Empty);
+                        ReportTcpSNIError(0, SNICommon.ConnTimeoutError, Strings.SNI_ERROR_11);
                         return TdsEnums.SNI_WAIT_TIMEOUT;
                     }
 
