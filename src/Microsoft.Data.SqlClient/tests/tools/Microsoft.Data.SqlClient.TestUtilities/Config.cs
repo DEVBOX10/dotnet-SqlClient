@@ -20,6 +20,7 @@ namespace Microsoft.Data.SqlClient.TestUtilities
         public string AADServicePrincipalId = null;
         public string AADServicePrincipalSecret = null;
         public string AzureKeyVaultURL = null;
+        public string AzureKeyVaultTenantId = null;
         public string AzureKeyVaultClientId = null;
         public string AzureKeyVaultClientSecret = null;
         public bool EnclaveEnabled = false;
@@ -35,7 +36,7 @@ namespace Microsoft.Data.SqlClient.TestUtilities
         public bool IsDNSCachingSupportedCR = false;  // this is for the control ring
         public bool IsDNSCachingSupportedTR = false;  // this is for the tenant ring
         public string EnclaveAzureDatabaseConnString = null;
-        public string UserManagedIdentityObjectId = null;
+        public string UserManagedIdentityClientId = null;
 
         public static Config Load(string configPath = @"config.json")
         {

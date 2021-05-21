@@ -935,6 +935,23 @@ namespace Microsoft.Data.SqlClient
             }
         }
 
+        /// <include file='../../../../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/Dispose/*' />
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                if (disposing)
+                {
+                    Close();
+                }
+                base.Dispose(disposing);
+            }
+            catch (SqlException ex)
+            {
+                SqlClientEventSource.Log.TryTraceEvent("SqlDataReader.Dispose | ERR | Error Message: {0}, Stack Trace: {1}", ex.Message, ex.StackTrace);
+            }
+        }
+
         /// <include file='..\..\..\..\..\..\..\doc\snippets\Microsoft.Data.SqlClient\SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/Close/*' />
         override public void Close()
         {
@@ -1067,7 +1084,7 @@ namespace Microsoft.Data.SqlClient
                             {
                                 _sharedState._dataReady = true;      // set _sharedState._dataReady to not confuse CleanPartialRead
                             }
-                            _stateObj._internalTimeout = false;
+                            _stateObj.SetTimeoutStateStopped();
                             if (_sharedState._dataReady)
                             {
                                 cleanDataFailed = true;
@@ -4101,7 +4118,7 @@ namespace Microsoft.Data.SqlClient
 
                 if (!_parser.TryReadSqlValue(_data[_sharedState._nextColumnDataToRead], columnMetaData, (int)_sharedState._columnDataBytesRemaining, _stateObj,
                                              _command != null ? _command.ColumnEncryptionSetting : SqlCommandColumnEncryptionSetting.UseConnectionSetting,
-                                             columnMetaData.column))
+                                             columnMetaData.column, _command))
                 { // will read UDTs as VARBINARY.
                     return false;
                 }
@@ -4262,16 +4279,26 @@ namespace Microsoft.Data.SqlClient
                     _sharedState._nextColumnDataToRead = _sharedState._nextColumnHeaderToRead;
                     _sharedState._nextColumnHeaderToRead++;  // We read this one
 
-                    if (isNull && columnMetaData.type != SqlDbType.Timestamp /* Maintain behavior for known bug (Dev10 479607) rejected as breaking change - See comments in GetNullSqlValue for timestamp */)
+                    if (isNull)
                     {
-                        TdsParser.GetNullSqlValue(_data[_sharedState._nextColumnDataToRead],
-                            columnMetaData,
-                            _command != null ? _command.ColumnEncryptionSetting : SqlCommandColumnEncryptionSetting.UseConnectionSetting,
-                            _parser.Connection);
-
-                        if (!readHeaderOnly)
+                        if (columnMetaData.type == SqlDbType.Timestamp)
                         {
-                            _sharedState._nextColumnDataToRead++;
+                            if (!LocalAppContextSwitches.LegacyRowVersionNullBehavior)
+                            {
+                                _data[i].SetToNullOfType(SqlBuffer.StorageType.SqlBinary);
+                            }
+                        }
+                        else
+                        {
+                            TdsParser.GetNullSqlValue(_data[_sharedState._nextColumnDataToRead],
+                                columnMetaData,
+                                _command != null ? _command.ColumnEncryptionSetting : SqlCommandColumnEncryptionSetting.UseConnectionSetting,
+                                _parser.Connection);
+
+                            if (!readHeaderOnly)
+                            {
+                                _sharedState._nextColumnDataToRead++;
+                            }
                         }
                     }
                     else

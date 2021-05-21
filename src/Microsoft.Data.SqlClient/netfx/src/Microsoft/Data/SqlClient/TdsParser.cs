@@ -554,6 +554,9 @@ namespace Microsoft.Data.SqlClient
                     case SqlAuthenticationMethod.ActiveDirectoryMSI:
                         SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.Connect|SEC> Active Directory MSI authentication");
                         break;
+                    case SqlAuthenticationMethod.ActiveDirectoryDefault:
+                        SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.Connect|SEC> Active Directory Default authentication");
+                        break;
                     case SqlAuthenticationMethod.SqlPassword:
                         SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.Connect|SEC> SQL Password authentication");
                         break;
@@ -593,7 +596,7 @@ namespace Microsoft.Data.SqlClient
             }
 
             _physicalStateObj.CreatePhysicalSNIHandle(serverInfo.ExtendedServerName, ignoreSniOpenTimeout, timerExpire,
-                        out instanceName, _sniSpnBuffer, false, true, fParallel, transparentNetworkResolutionState, totalTimeout, FQDNforDNSCahce);
+                        out instanceName, _sniSpnBuffer, false, true, fParallel, transparentNetworkResolutionState, totalTimeout, _connHandler.ConnectionOptions.IPAddressPreference, FQDNforDNSCahce);
 
             if (TdsEnums.SNI_SUCCESS != _physicalStateObj.Status)
             {
@@ -656,7 +659,8 @@ namespace Microsoft.Data.SqlClient
 
                 // On Instance failure re-connect and flush SNI named instance cache.
                 _physicalStateObj.SniContext = SniContext.Snix_Connect;
-                _physicalStateObj.CreatePhysicalSNIHandle(serverInfo.ExtendedServerName, ignoreSniOpenTimeout, timerExpire, out instanceName, _sniSpnBuffer, true, true, fParallel, transparentNetworkResolutionState, totalTimeout, serverInfo.ResolvedServerName);
+                _physicalStateObj.CreatePhysicalSNIHandle(serverInfo.ExtendedServerName, ignoreSniOpenTimeout, timerExpire, 
+                            out instanceName, _sniSpnBuffer, true, true, fParallel, transparentNetworkResolutionState, totalTimeout, _connHandler.ConnectionOptions.IPAddressPreference, serverInfo.ResolvedServerName);
 
                 if (TdsEnums.SNI_SUCCESS != _physicalStateObj.Status)
                 {
@@ -2262,7 +2266,7 @@ namespace Microsoft.Data.SqlClient
                 // If there is data ready, but we didn't exit the loop, then something is wrong
                 Debug.Assert(!dataReady, "dataReady not expected - did we forget to skip the row?");
 
-                if (stateObj._internalTimeout)
+                if (stateObj.IsTimeoutStateExpired)
                 {
                     runBehavior = RunBehavior.Attention;
                 }
@@ -2891,7 +2895,7 @@ namespace Microsoft.Data.SqlClient
                     stateObj._attentionSent = false;
                     stateObj._attentionReceived = false;
 
-                    if (RunBehavior.Clean != (RunBehavior.Clean & runBehavior) && !stateObj._internalTimeout)
+                    if (RunBehavior.Clean != (RunBehavior.Clean & runBehavior) && !stateObj.IsTimeoutStateExpired)
                     {
                         // Add attention error to collection - if not RunBehavior.Clean!
                         stateObj.AddError(new SqlError(0, 0, TdsEnums.MIN_ERROR_CLASS, _server, SQLMessage.OperationCancelled(), "", 0));
@@ -3301,7 +3305,7 @@ namespace Microsoft.Data.SqlClient
 
             if (LocalAppContextSwitches.MakeReadAsyncBlocking)
             {
-                // Can't retry TryProcessDone
+                // Don't retry TryProcessDone
                 stateObj._syncOverAsync = true;
             }
 
@@ -4646,7 +4650,7 @@ namespace Microsoft.Data.SqlClient
 
         internal bool TryProcessTceCryptoMetadata(TdsParserStateObject stateObj,
             SqlMetaDataPriv col,
-            SqlTceCipherInfoTable? cipherTable,
+            SqlTceCipherInfoTable cipherTable,
             SqlCommandColumnEncryptionSetting columnEncryptionSetting,
             bool isReturnValue)
         {
@@ -4657,7 +4661,7 @@ namespace Microsoft.Data.SqlClient
             UInt32 userType;
 
             // For return values there is not cipher table and no ordinal.
-            if (cipherTable.HasValue)
+            if (cipherTable != null)
             {
                 if (!stateObj.TryReadUInt16(out index))
                 {
@@ -4665,9 +4669,9 @@ namespace Microsoft.Data.SqlClient
                 }
 
                 // validate the index (ordinal passed)
-                if (index >= cipherTable.Value.Size)
+                if (index >= cipherTable.Size)
                 {
-                    SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.TryProcessTceCryptoMetadata|TCE> Incorrect ordinal received {0}, max tab size: {1}", index, cipherTable.Value.Size);
+                    SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.TryProcessTceCryptoMetadata|TCE> Incorrect ordinal received {0}, max tab size: {1}", index, cipherTable.Size);
                     throw SQL.ParsingErrorValue(ParsingErrorState.TceInvalidOrdinalIntoCipherInfoTable, index);
                 }
             }
@@ -4733,7 +4737,7 @@ namespace Microsoft.Data.SqlClient
                 _connHandler != null && _connHandler.ConnectionOptions != null &&
                 _connHandler.ConnectionOptions.ColumnEncryptionSetting == SqlConnectionColumnEncryptionSetting.Enabled))
             {
-                col.cipherMD = new SqlCipherMetadata(cipherTable.HasValue ? (SqlTceCipherInfoEntry?)cipherTable.Value[index] : null,
+                col.cipherMD = new SqlCipherMetadata(cipherTable != null ? (SqlTceCipherInfoEntry)cipherTable[index] : null,
                                                         index,
                                                         cipherAlgorithmId: cipherAlgorithmId,
                                                         cipherAlgorithmName: cipherAlgorithmName,
@@ -5243,7 +5247,7 @@ namespace Microsoft.Data.SqlClient
         /// <summary>
         /// <para> Parses the TDS message to read a single CIPHER_INFO table.</para>
         /// </summary>
-        internal bool TryProcessCipherInfoTable(TdsParserStateObject stateObj, out SqlTceCipherInfoTable? cipherTable)
+        internal bool TryProcessCipherInfoTable(TdsParserStateObject stateObj, out SqlTceCipherInfoTable cipherTable)
         {
             // Read count
             short tableSize = 0;
@@ -5280,7 +5284,7 @@ namespace Microsoft.Data.SqlClient
             Debug.Assert(cColumns > 0, "should have at least 1 column in metadata!");
 
             // Read the cipher info table first
-            SqlTceCipherInfoTable? cipherTable = null;
+            SqlTceCipherInfoTable cipherTable = null;
             if (_serverSupportsColumnEncryption)
             {
                 if (!TryProcessCipherInfoTable(stateObj, out cipherTable))
@@ -5496,7 +5500,7 @@ namespace Microsoft.Data.SqlClient
             return true;
         }
 
-        private bool TryCommonProcessMetaData(TdsParserStateObject stateObj, _SqlMetaData col, SqlTceCipherInfoTable? cipherTable, bool fColMD, SqlCommandColumnEncryptionSetting columnEncryptionSetting)
+        private bool TryCommonProcessMetaData(TdsParserStateObject stateObj, _SqlMetaData col, SqlTceCipherInfoTable cipherTable, bool fColMD, SqlCommandColumnEncryptionSetting columnEncryptionSetting)
         {
             byte byteLen;
             UInt32 userType;
@@ -5583,7 +5587,7 @@ namespace Microsoft.Data.SqlClient
             if (fColMD && _serverSupportsColumnEncryption && col.isEncrypted)
             {
                 // If the column is encrypted, we should have a valid cipherTable
-                if (cipherTable.HasValue && !TryProcessTceCryptoMetadata(stateObj, col, cipherTable.Value, columnEncryptionSetting, isReturnValue: false))
+                if (cipherTable != null && !TryProcessTceCryptoMetadata(stateObj, col, cipherTable, columnEncryptionSetting, isReturnValue: false))
                 {
                     return false;
                 }
@@ -6669,7 +6673,8 @@ namespace Microsoft.Data.SqlClient
                                       int length,
                                       TdsParserStateObject stateObj,
                                       SqlCommandColumnEncryptionSetting columnEncryptionOverride,
-                                      string columnName)
+                                      string columnName, 
+                                      SqlCommand command = null)
         {
             bool isPlp = md.metaType.IsPlp;
             byte tdsType = md.tdsType;
@@ -6732,7 +6737,7 @@ namespace Microsoft.Data.SqlClient
                         try
                         {
                             // CipherInfo is present, decrypt and read
-                            byte[] unencryptedBytes = SqlSecurityUtility.DecryptWithKey(b, md.cipherMD, _connHandler.ConnectionOptions.DataSource);
+                            byte[] unencryptedBytes = SqlSecurityUtility.DecryptWithKey(b, md.cipherMD, _connHandler.Connection, command);
 
                             if (unencryptedBytes != null)
                             {
@@ -8142,6 +8147,7 @@ namespace Microsoft.Data.SqlClient
 
         private byte[] SerializeEncodingChar(string s, int numChars, int offset, Encoding encoding)
         {
+#if NETFRAMEWORK || NETSTANDARD2_0
             char[] charData;
             byte[] byteData = null;
 
@@ -8156,33 +8162,38 @@ namespace Microsoft.Data.SqlClient
             encoding.GetBytes(charData, 0, charData.Length, byteData, 0);
 
             return byteData;
+#else
+            return encoding.GetBytes(s, offset, numChars);
+#endif
         }
 
         private Task WriteEncodingChar(string s, int numChars, int offset, Encoding encoding, TdsParserStateObject stateObj, bool canAccumulate = true)
         {
-            char[] charData;
-            byte[] byteData;
-
             // if hitting 7.0 server, encoding will be null in metadata for columns or return values since
             // 7.0 has no support for multiple code pages in data - single code page support only
             if (encoding == null)
                 encoding = _defaultEncoding;
 
-            charData = s.ToCharArray(offset, numChars);
-
             // Optimization: if the entire string fits in the current buffer, then copy it directly
             int bytesLeft = stateObj._outBuff.Length - stateObj._outBytesUsed;
-            if ((numChars <= bytesLeft) && (encoding.GetMaxByteCount(charData.Length) <= bytesLeft))
+            if ((numChars <= bytesLeft) && (encoding.GetMaxByteCount(numChars) <= bytesLeft))
             {
-                int bytesWritten = encoding.GetBytes(charData, 0, charData.Length, stateObj._outBuff, stateObj._outBytesUsed);
+                int bytesWritten = encoding.GetBytes(s, offset, numChars, stateObj._outBuff, stateObj._outBytesUsed);
                 stateObj._outBytesUsed += bytesWritten;
                 return null;
             }
             else
             {
-                byteData = encoding.GetBytes(charData, 0, numChars);
+#if NETFRAMEWORK || NETSTANDARD2_0
+                var charData = s.ToCharArray(offset, numChars);
+                var byteData = encoding.GetBytes(charData, 0, numChars);
                 Debug.Assert(byteData != null, "no data from encoding");
                 return stateObj.WriteByteArray(byteData, byteData.Length, 0, canAccumulate);
+#else
+                var byteData = encoding.GetBytes(s, offset, numChars);
+                Debug.Assert(byteData != null, "no data from encoding");
+                return stateObj.WriteByteArray(byteData, byteData.Length, 0, canAccumulate);
+#endif
             }
         }
 
@@ -8579,6 +8590,9 @@ namespace Microsoft.Data.SqlClient
                             case SqlAuthenticationMethod.ActiveDirectoryMSI:
                                 workflow = TdsEnums.MSALWORKFLOW_ACTIVEDIRECTORYMANAGEDIDENTITY;
                                 break;
+                            case SqlAuthenticationMethod.ActiveDirectoryDefault:
+                                workflow = TdsEnums.MSALWORKFLOW_ACTIVEDIRECTORYDEFAULT;
+                                break;
                             default:
                                 Debug.Assert(false, "Unrecognized Authentication type for fedauth MSAL request");
                                 break;
@@ -8691,7 +8705,7 @@ namespace Microsoft.Data.SqlClient
         internal void TdsLogin(SqlLogin rec,
                                TdsEnums.FeatureExtension requestedFeatures,
                                SessionData recoverySessionData,
-                               FederatedAuthenticationFeatureExtensionData? fedAuthFeatureExtensionData,
+                               FederatedAuthenticationFeatureExtensionData fedAuthFeatureExtensionData,
                                SqlClientOriginalNetworkAddressInfo originalNetworkAddressInfo)
         {
             _physicalStateObj.SetTimeoutSeconds(rec.timeout);
@@ -8853,7 +8867,7 @@ namespace Microsoft.Data.SqlClient
                     if ((requestedFeatures & TdsEnums.FeatureExtension.FedAuth) != 0)
                     {
                         Debug.Assert(fedAuthFeatureExtensionData != null, "fedAuthFeatureExtensionData should not null.");
-                        length += WriteFedAuthFeatureRequest(fedAuthFeatureExtensionData.Value, write: false);
+                        length += WriteFedAuthFeatureRequest(fedAuthFeatureExtensionData, write: false);
                     }
                     if ((requestedFeatures & TdsEnums.FeatureExtension.Tce) != 0)
                     {
@@ -9130,7 +9144,7 @@ namespace Microsoft.Data.SqlClient
                     {
                         SqlClientEventSource.Log.TryTraceEvent("<sc.TdsParser.TdsLogin|SEC> Sending federated authentication feature request");
                         Debug.Assert(fedAuthFeatureExtensionData != null, "fedAuthFeatureExtensionData should not null.");
-                        WriteFedAuthFeatureRequest(fedAuthFeatureExtensionData.Value, write: true);
+                        WriteFedAuthFeatureRequest(fedAuthFeatureExtensionData, write: true);
                     };
                     if ((requestedFeatures & TdsEnums.FeatureExtension.Tce) != 0)
                     {
@@ -10027,7 +10041,7 @@ namespace Microsoft.Data.SqlClient
                                         }
 
                                         Debug.Assert(serializedValue != null, "serializedValue should not be null in TdsExecuteRPC.");
-                                        encryptedValue = SqlSecurityUtility.EncryptWithKey(serializedValue, param.CipherMetadata, _connHandler.ConnectionOptions.DataSource);
+                                        encryptedValue = SqlSecurityUtility.EncryptWithKey(serializedValue, param.CipherMetadata, _connHandler.Connection, cmd);
                                     }
                                     catch (Exception e)
                                     {
@@ -10435,14 +10449,7 @@ namespace Microsoft.Data.SqlClient
                 }
                 catch (Exception e)
                 {
-                    // UNDONE - should not be catching all exceptions!!!
-                    if (!ADP.IsCatchableExceptionType(e))
-                    {
-                        throw;
-                    }
-
                     FailureCleanup(stateObj, e);
-
                     throw;
                 }
                 FinalizeExecuteRPC(stateObj);
@@ -11059,7 +11066,7 @@ namespace Microsoft.Data.SqlClient
         /// decrypt the CEK and keep it ready for encryption.
         /// </summary>
         /// <returns></returns>
-        internal void LoadColumnEncryptionKeys(_SqlMetaDataSet metadataCollection, string serverName)
+        internal void LoadColumnEncryptionKeys(_SqlMetaDataSet metadataCollection, SqlConnection connection, SqlCommand command = null)
         {
             if (_serverSupportsColumnEncryption && ShouldEncryptValuesForBulkCopy())
             {
@@ -11070,7 +11077,7 @@ namespace Microsoft.Data.SqlClient
                         _SqlMetaData md = metadataCollection[col];
                         if (md.isEncrypted)
                         {
-                            SqlSecurityUtility.DecryptSymmetricKey(md.cipherMD, serverName);
+                            SqlSecurityUtility.DecryptSymmetricKey(md.cipherMD, connection, command);
                         }
                     }
                 }
@@ -11118,14 +11125,14 @@ namespace Microsoft.Data.SqlClient
             //     Note- Cek table (with 0 entries) will be present if TCE
             //     was enabled and server supports it!
             // OR if encryption was disabled in connection options
-            if (!metadataCollection.cekTable.HasValue ||
+            if (metadataCollection.cekTable == null ||
                 !ShouldEncryptValuesForBulkCopy())
             {
                 WriteShort(0x00, stateObj);
                 return;
             }
 
-            SqlTceCipherInfoTable cekTable = metadataCollection.cekTable.Value;
+            SqlTceCipherInfoTable cekTable = metadataCollection.cekTable;
             ushort count = (ushort)cekTable.Size;
 
             WriteShort(count, stateObj);
@@ -11431,7 +11438,8 @@ namespace Microsoft.Data.SqlClient
             return SqlSecurityUtility.EncryptWithKey(
                     serializedValue,
                     metadata.cipherMD,
-                    _connHandler.ConnectionOptions.DataSource);
+                    _connHandler.Connection,
+                    null);
         }
 
         internal Task WriteBulkCopyValue(object value, SqlMetaDataPriv metadata, TdsParserStateObject stateObj, bool isSqlType, bool isDataFeed, bool isNull)
@@ -13667,33 +13675,33 @@ namespace Microsoft.Data.SqlClient
                                         + "         _defaultCodePage = {6}\n\t"
                                         + "         _defaultLCID = {7}\n\t"
                                         + "         _defaultEncoding = {8}\n\t"
-                                        + "         _encryptionOption = {10}\n\t"
-                                        + "         _currentTransaction = {11}\n\t"
-                                        + "         _pendingTransaction = {12}\n\t"
-                                        + "         _retainedTransactionId = {13}\n\t"
-                                        + "         _nonTransactedOpenResultCount = {14}\n\t"
-                                        + "         _connHandler = {15}\n\t"
-                                        + "         _fMARS = {16}\n\t"
-                                        + "         _sessionPool = {17}\n\t"
-                                        + "         _isShiloh = {18}\n\t"
-                                        + "         _isShilohSP1 = {19}\n\t"
-                                        + "         _isYukon = {20}\n\t"
-                                        + "         _sniSpnBuffer = {21}\n\t"
-                                        + "         _errors = {22}\n\t"
-                                        + "         _warnings = {23}\n\t"
-                                        + "         _attentionErrors = {24}\n\t"
-                                        + "         _attentionWarnings = {25}\n\t"
-                                        + "         _statistics = {26}\n\t"
-                                        + "         _statisticsIsInTransaction = {27}\n\t"
-                                        + "         _fPreserveTransaction = {28}"
-                                        + "         _fParallel = {29}"
+                                        + "         _encryptionOption = {9}\n\t"
+                                        + "         _currentTransaction = {10}\n\t"
+                                        + "         _pendingTransaction = {11}\n\t"
+                                        + "         _retainedTransactionId = {12}\n\t"
+                                        + "         _nonTransactedOpenResultCount = {13}\n\t"
+                                        + "         _connHandler = {14}\n\t"
+                                        + "         _fMARS = {15}\n\t"
+                                        + "         _sessionPool = {16}\n\t"
+                                        + "         _isShiloh = {17}\n\t"
+                                        + "         _isShilohSP1 = {18}\n\t"
+                                        + "         _isYukon = {19}\n\t"
+                                        + "         _sniSpnBuffer = {20}\n\t"
+                                        + "         _errors = {21}\n\t"
+                                        + "         _warnings = {22}\n\t"
+                                        + "         _attentionErrors = {23}\n\t"
+                                        + "         _attentionWarnings = {24}\n\t"
+                                        + "         _statistics = {25}\n\t"
+                                        + "         _statisticsIsInTransaction = {26}\n\t"
+                                        + "         _fPreserveTransaction = {27}"
+                                        + "         _fParallel = {28}"
                                         ;
         internal string TraceString()
         {
             return string.Format(/*IFormatProvider*/ null,
                             StateTraceFormatString,
-                            null == _physicalStateObj ? bool.TrueString : bool.FalseString,
-                            null == _pMarsPhysicalConObj ? bool.TrueString : bool.FalseString,
+                            null == _physicalStateObj ? "(null)" : _physicalStateObj.ObjectID.ToString((IFormatProvider)null),
+                            null == _pMarsPhysicalConObj ? "(null)" : _pMarsPhysicalConObj.ObjectID.ToString((IFormatProvider)null),
                             _state,
                             _server,
                             _fResetConnection ? bool.TrueString : bool.FalseString,
@@ -13701,7 +13709,6 @@ namespace Microsoft.Data.SqlClient
                             _defaultCodePage,
                             _defaultLCID,
                             TraceObjectClass(_defaultEncoding),
-                            "",
                             _encryptionOption,
                             null == _currentTransaction ? "(null)" : _currentTransaction.TraceString(),
                             null == _pendingTransaction ? "(null)" : _pendingTransaction.TraceString(),

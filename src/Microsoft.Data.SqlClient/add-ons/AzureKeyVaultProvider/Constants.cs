@@ -2,21 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 namespace Microsoft.Data.SqlClient.AlwaysEncrypted.AzureKeyVaultProvider
 {
     internal static class Constants
     {
-        /// <summary>
-        /// Hashing algorithm used for signing
-        /// </summary>
-        internal const string HashingAlgorithm = @"RS256";
-
         /// <summary>
         /// Azure Key Vault Domain Name
         /// </summary>
@@ -32,7 +21,7 @@ namespace Microsoft.Data.SqlClient.AlwaysEncrypted.AzureKeyVaultProvider
         };
 
         /// <summary>
-        /// Always Encrypted Param names for exec handling
+        /// Always Encrypted Parameter names for exec handling
         /// </summary>
         internal const string AeParamColumnEncryptionKey = "columnEncryptionKey";
         internal const string AeParamEncryptionAlgorithm = "encryptionAlgorithm";

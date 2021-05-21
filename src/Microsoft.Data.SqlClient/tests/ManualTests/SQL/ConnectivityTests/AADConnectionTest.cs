@@ -164,7 +164,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             AggregateException e = Assert.Throws<AggregateException>(() => ConnectAndDisconnect(connStr));
 
             string expectedMessage = "ID3242: The security token could not be authenticated or authorized.";
-            Assert.Contains(expectedMessage, e.InnerException.InnerException.InnerException.Message);
+            Assert.Contains(expectedMessage, e.InnerException.InnerException.Message);
         }
 
 
@@ -184,27 +184,20 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         public static void testADPasswordAuthentication()
         {
             // Connect to Azure DB with password and retrieve user name.
-            try
+            using (SqlConnection conn = new SqlConnection(DataTestUtility.AADPasswordConnectionString))
             {
-                using (SqlConnection conn = new SqlConnection(DataTestUtility.AADPasswordConnectionString))
+                conn.Open();
+                using (SqlCommand sqlCommand = new SqlCommand
+                (
+                    cmdText: $"SELECT SUSER_SNAME();",
+                    connection: conn,
+                    transaction: null
+                ))
                 {
-                    conn.Open();
-                    using (SqlCommand sqlCommand = new SqlCommand
-                    (
-                        cmdText: $"SELECT SUSER_SNAME();",
-                        connection: conn,
-                        transaction: null
-                    ))
-                    {
-                        string customerId = (string)sqlCommand.ExecuteScalar();
-                        string expected = DataTestUtility.RetrieveValueFromConnStr(DataTestUtility.AADPasswordConnectionString, new string[] { "User ID", "UID" });
-                        Assert.Equal(expected, customerId);
-                    }
+                    string customerId = (string)sqlCommand.ExecuteScalar();
+                    string expected = DataTestUtility.RetrieveValueFromConnStr(DataTestUtility.AADPasswordConnectionString, new string[] { "User ID", "UID" });
+                    Assert.Equal(expected, customerId);
                 }
-            }
-            catch (SqlException e)
-            {
-                throw e;
             }
         }
 
@@ -369,7 +362,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             Assert.Contains(expectedMessage, e.Message);
         }
 
-        [ConditionalFact(nameof(IsAADConnStringsSetup))]
+        [ConditionalFact(nameof(IsAADConnStringsSetup), nameof(IsManagedIdentitySetup))]
         public static void ActiveDirectoryManagedIdentityWithPasswordMustFail()
         {
             // connection fails with expected error message.
@@ -385,7 +378,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         [InlineData("2445343 2343253")]
         [InlineData("2445343$#^@@%2343253")]
-        [ConditionalTheory(nameof(IsAADConnStringsSetup))]
+        [ConditionalTheory(nameof(IsAADConnStringsSetup), nameof(IsManagedIdentitySetup))]
         public static void ActiveDirectoryManagedIdentityWithInvalidUserIdMustFail(string userId)
         {
             // connection fails with expected error message.
@@ -395,7 +388,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
             AggregateException e = Assert.Throws<AggregateException>(() => ConnectAndDisconnect(connStrWithNoCred));
 
-            string expectedMessage = "Response: {\"error\":\"invalid_request\",\"error_description\":\"Identity not found\"}";
+            string expectedMessage = "ManagedIdentityCredential authentication unavailable";
             Assert.Contains(expectedMessage, e.GetBaseException().Message);
         }
 
@@ -434,6 +427,52 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             Assert.Contains(expectedMessage, e.Message);
         }
 
+        [ConditionalFact(nameof(IsAADConnStringsSetup))]
+        public static void ActiveDirectoryDefaultWithCredentialsMustFail()
+        {
+            // connection fails with expected error message.
+            string[] credKeys = { "Authentication", "User ID", "Password", "UID", "PWD" };
+            string connStrWithNoCred = DataTestUtility.RemoveKeysInConnStr(DataTestUtility.AADPasswordConnectionString, credKeys) +
+                "Authentication=Active Directory Default;";
+
+            SecureString str = new SecureString();
+            foreach (char c in "hello")
+            {
+                str.AppendChar(c);
+            }
+            str.MakeReadOnly();
+            SqlCredential credential = new SqlCredential("someuser", str);
+            InvalidOperationException e = Assert.Throws<InvalidOperationException>(() => ConnectAndDisconnect(connStrWithNoCred, credential));
+
+            string expectedMessage = "Cannot set the Credential property if 'Authentication=Active Directory Default' has been specified in the connection string.";
+            Assert.Contains(expectedMessage, e.Message);
+        }
+
+        [ConditionalFact(nameof(IsAADConnStringsSetup))]
+        public static void ActiveDirectoryDefaultWithPasswordMustFail()
+        {
+            // connection fails with expected error message.
+            string[] credKeys = { "Authentication", "User ID", "Password", "UID", "PWD" };
+            string connStrWithNoCred = DataTestUtility.RemoveKeysInConnStr(DataTestUtility.AADPasswordConnectionString, credKeys) +
+                "Authentication=ActiveDirectoryDefault; Password=anything";
+
+            ArgumentException e = Assert.Throws<ArgumentException>(() => ConnectAndDisconnect(connStrWithNoCred));
+
+            string expectedMessage = "Cannot use 'Authentication=Active Directory Default' with 'Password' or 'PWD' connection string keywords.";
+            Assert.Contains(expectedMessage, e.Message);
+        }
+
+        [ConditionalFact(nameof(IsAADConnStringsSetup))]
+        public static void ActiveDirectoryDefaultMustPass()
+        {
+            string[] credKeys = { "Authentication", "User ID", "Password", "UID", "PWD" };
+            string connStr = DataTestUtility.RemoveKeysInConnStr(DataTestUtility.AADPasswordConnectionString, credKeys) +
+                "Authentication=ActiveDirectoryDefault;";
+
+            // Connection should be established using Managed Identity by default.
+            ConnectAndDisconnect(connStr);
+        }
+
         [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.IsIntegratedSecuritySetup), nameof(DataTestUtility.AreConnStringsSetup))]
         public static void ADInteractiveUsingSSPI()
         {
@@ -444,33 +483,42 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             ConnectAndDisconnect(connStr);
         }
 
+        // Test passes locally everytime, but in pieplines fails randomly with uncertainity.
+        // e.g. Second AAD connection too slow (802ms)! (More than 30% of the first (576ms).)
+        [ActiveIssue(16058)]
         [ConditionalFact(nameof(IsAADConnStringsSetup))]
         public static void ConnectionSpeed()
         {
+            var connString = DataTestUtility.AADPasswordConnectionString;
+            
             //Ensure server endpoints are warm
-            using (var connectionDrill = new SqlConnection(DataTestUtility.AADPasswordConnectionString))
+            using (var connectionDrill = new SqlConnection(connString))
             {
                 connectionDrill.Open();
             }
+            
             SqlConnection.ClearAllPools();
+            ActiveDirectoryAuthenticationProvider.ClearUserTokenCache();
 
-            using (var connectionDrill = new SqlConnection(DataTestUtility.AADPasswordConnectionString))
+            Stopwatch firstConnectionTime = new Stopwatch();
+            Stopwatch secondConnectionTime = new Stopwatch();
+
+            using (var connectionDrill = new SqlConnection(connString))
             {
-                Stopwatch firstConnectionTime = new Stopwatch();
                 firstConnectionTime.Start();
                 connectionDrill.Open();
                 firstConnectionTime.Stop();
-                using (var connectionDrill2 = new SqlConnection(DataTestUtility.AADPasswordConnectionString))
+                using (var connectionDrill2 = new SqlConnection(connString))
                 {
-                    Stopwatch secondConnectionTime = new Stopwatch();
                     secondConnectionTime.Start();
                     connectionDrill2.Open();
                     secondConnectionTime.Stop();
-                    // Subsequent AAD connections within a short timeframe should use an auth token cached from the connection pool
-                    // Second connection speed in tests was typically 10-15% of the first connection time. Using 30% since speeds may vary.
-                    Assert.True(secondConnectionTime.ElapsedMilliseconds / firstConnectionTime.ElapsedMilliseconds < .30, $"Second AAD connection too slow ({secondConnectionTime.ElapsedMilliseconds}ms)! (More than 30% of the first ({firstConnectionTime.ElapsedMilliseconds}ms).)");
                 }
             }
+            
+            // Subsequent AAD connections within a short timeframe should use an auth token cached from the connection pool
+            // Second connection speed in tests was typically 10-15% of the first connection time. Using 30% since speeds may vary.
+            Assert.True(((double)secondConnectionTime.ElapsedMilliseconds / firstConnectionTime.ElapsedMilliseconds) < 0.30, $"Second AAD connection too slow ({secondConnectionTime.ElapsedMilliseconds}ms)! (More than 30% of the first ({firstConnectionTime.ElapsedMilliseconds}ms).)");
         }
 
         #region Managed Identity Authentication tests
@@ -489,7 +537,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         {
             string[] removeKeys = { "Authentication", "User ID", "Password", "UID", "PWD" };
             string connStr = DataTestUtility.RemoveKeysInConnStr(DataTestUtility.AADPasswordConnectionString, removeKeys) +
-                $"Authentication=Active Directory Managed Identity; User Id={DataTestUtility.UserManagedIdentityObjectId};";
+                $"Authentication=Active Directory Managed Identity; User Id={DataTestUtility.UserManagedIdentityClientId};";
             ConnectAndDisconnect(connStr);
         }
 
@@ -541,7 +589,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         {
             string[] removeKeys = { "Authentication", "User ID", "Password", "UID", "PWD", "Trusted_Connection", "Integrated Security" };
             string connectionString = DataTestUtility.RemoveKeysInConnStr(DataTestUtility.TCPConnectionString, removeKeys)
-                + $"Authentication=Active Directory Managed Identity; User Id={DataTestUtility.UserManagedIdentityObjectId}";
+                + $"Authentication=Active Directory Managed Identity; User Id={DataTestUtility.UserManagedIdentityClientId}";
 
             using (SqlConnection conn = new SqlConnection(connectionString))
             {

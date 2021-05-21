@@ -283,9 +283,9 @@ namespace Microsoft.Data.SqlClient
         {
             return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_DeviceFlowWithUsernamePassword));
         }
-        internal static Exception ManagedIdentityWithPassword(string authenticationMode)
+        internal static Exception NonInteractiveWithPassword(string authenticationMode)
         {
-            return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_ManagedIdentityWithPassword, authenticationMode));
+            return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_NonInteractiveWithPassword, authenticationMode));
         }
         static internal Exception SettingIntegratedWithCredential()
         {
@@ -299,9 +299,9 @@ namespace Microsoft.Data.SqlClient
         {
             return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingDeviceFlowWithCredential));
         }
-        static internal Exception SettingManagedIdentityWithCredential(string authenticationMode)
+        static internal Exception SettingNonInteractiveWithCredential(string authenticationMode)
         {
-            return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingManagedIdentityWithCredential, authenticationMode));
+            return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingNonInteractiveWithCredential, authenticationMode));
         }
         static internal Exception SettingCredentialWithIntegratedArgument()
         {
@@ -315,9 +315,9 @@ namespace Microsoft.Data.SqlClient
         {
             return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithDeviceFlow));
         }
-        static internal Exception SettingCredentialWithManagedIdentityArgument(string authenticationMode)
+        static internal Exception SettingCredentialWithNonInteractiveArgument(string authenticationMode)
         {
-            return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithManagedIdentity, authenticationMode));
+            return ADP.Argument(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithNonInteractive, authenticationMode));
         }
         static internal Exception SettingCredentialWithIntegratedInvalid()
         {
@@ -331,9 +331,9 @@ namespace Microsoft.Data.SqlClient
         {
             return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithDeviceFlow));
         }
-        static internal Exception SettingCredentialWithManagedIdentityInvalid(string authenticationMode)
+        static internal Exception SettingCredentialWithNonInteractiveInvalid(string authenticationMode)
         {
-            return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithManagedIdentity, authenticationMode));
+            return ADP.InvalidOperation(System.StringsHelper.GetString(Strings.SQL_SettingCredentialWithNonInteractive, authenticationMode));
         }
         internal static Exception NullEmptyTransactionName()
         {
@@ -740,6 +740,11 @@ namespace Microsoft.Data.SqlClient
             return ADP.TypeLoad(System.StringsHelper.GetString(Strings.SQLUDT_Unexpected, exceptionText));
         }
 
+        internal static Exception DateTimeOverflow()
+        {
+            return new OverflowException(SqlTypes.SQLResource.DateTimeOverflowMessage);
+        }
+
         //
         // SQL.SqlDependency
         //
@@ -786,6 +791,13 @@ namespace Microsoft.Data.SqlClient
         //
         // SQL.SqlDelegatedTransaction
         //
+        static internal Exception CannotCompleteDelegatedTransactionWithOpenResults(SqlInternalConnectionTds internalConnection, bool marsOn)
+        {
+            SqlErrorCollection errors = new SqlErrorCollection();
+            errors.Add(new SqlError(TdsEnums.TIMEOUT_EXPIRED, (byte)0x00, TdsEnums.MIN_ERROR_CLASS, null, (StringsHelper.GetString(Strings.ADP_OpenReaderExists, marsOn ? ADP.Command : ADP.Connection)), "", 0, TdsEnums.SNI_WAIT_TIMEOUT));
+            return SqlException.CreateException(errors, null, internalConnection);
+        }
+
         internal static TransactionPromotionException PromotionFailed(Exception inner)
         {
             TransactionPromotionException e = new TransactionPromotionException(System.StringsHelper.GetString(Strings.SqlDelegatedTransaction_PromotionFailed), inner);
@@ -2139,6 +2151,8 @@ namespace Microsoft.Data.SqlClient
     /// </summary>
     internal class ConcurrentQueueSemaphore
     {
+        private static readonly Action<Task, object> s_continuePop = ContinuePop;
+
         private readonly SemaphoreSlim _semaphore;
         private readonly ConcurrentQueue<TaskCompletionSource<bool>> _queue =
             new ConcurrentQueue<TaskCompletionSource<bool>>();
@@ -2150,19 +2164,36 @@ namespace Microsoft.Data.SqlClient
 
         public Task WaitAsync(CancellationToken cancellationToken)
         {
-            var tcs = new TaskCompletionSource<bool>();
-            _queue.Enqueue(tcs);
-            _semaphore.WaitAsync().ContinueWith(t =>
+            // try sync wait with 0 which will not block to see if we need to do an async wait
+            if (_semaphore.Wait(0, cancellationToken))
             {
-                if (_queue.TryDequeue(out TaskCompletionSource<bool> popped))
-                    popped.SetResult(true);
-            }, cancellationToken);
-            return tcs.Task;
+                return Task.CompletedTask;
+            }
+            else
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                _queue.Enqueue(tcs);
+                _semaphore.WaitAsync().ContinueWith(
+                    continuationAction: s_continuePop,
+                    state: _queue,
+                    cancellationToken: cancellationToken
+                );
+                return tcs.Task;
+            }
         }
 
         public void Release()
         {
             _semaphore.Release();
+        }
+
+        private static void ContinuePop(Task task, object state)
+        {
+            ConcurrentQueue<TaskCompletionSource<bool>> queue = (ConcurrentQueue<TaskCompletionSource<bool>>)state;
+            if (queue.TryDequeue(out TaskCompletionSource<bool> popped))
+            {
+                popped.SetResult(true);
+            }
         }
     }
 

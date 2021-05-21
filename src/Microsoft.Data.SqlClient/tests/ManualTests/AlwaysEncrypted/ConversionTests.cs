@@ -18,7 +18,7 @@ using Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted.Setup;
 namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
 {
     [PlatformSpecific(TestPlatforms.Windows)]
-    public class ConversionTests : IDisposable
+    public sealed class ConversionTests : IDisposable
     {
 
         private const string IdentityColumnName = "IdentityColumn";
@@ -29,11 +29,11 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
         private const decimal SmallMoneyMinValue = -214748.3648M;
         private const int MaxLength = 10000;
         private int NumberOfRows = DataTestUtility.EnclaveEnabled ? 10 : 100;
-        private readonly X509Certificate2 certificate;
+        private static X509Certificate2 certificate;
         private ColumnMasterKey columnMasterKey;
         private ColumnEncryptionKey columnEncryptionKey;
         private SqlColumnEncryptionCertificateStoreProvider certStoreProvider = new SqlColumnEncryptionCertificateStoreProvider();
-        protected List<DbObject> databaseObjects = new List<DbObject>();
+        private List<DbObject> _databaseObjects = new List<DbObject>();
 
         private class ColumnMetaData
         {
@@ -55,21 +55,24 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
 
         public ConversionTests()
         {
-            certificate = CertificateUtility.CreateCertificate();
+            if(certificate == null)
+            {
+                certificate = CertificateUtility.CreateCertificate();
+            }
             columnMasterKey = new CspColumnMasterKey(DatabaseHelper.GenerateUniqueName("CMK"), certificate.Thumbprint, certStoreProvider, DataTestUtility.EnclaveEnabled);
-            databaseObjects.Add(columnMasterKey);
+            _databaseObjects.Add(columnMasterKey);
 
             columnEncryptionKey = new ColumnEncryptionKey(DatabaseHelper.GenerateUniqueName("CEK"),
                                                           columnMasterKey,
                                                           certStoreProvider);
-            databaseObjects.Add(columnEncryptionKey);
+            _databaseObjects.Add(columnEncryptionKey);
 
-            foreach(string connectionStr in DataTestUtility.AEConnStringsSetup)
+            foreach (string connectionStr in DataTestUtility.AEConnStringsSetup)
             {
                 using (SqlConnection sqlConnection = new SqlConnection(connectionStr))
                 {
                     sqlConnection.Open();
-                    databaseObjects.ForEach(o => o.Create(sqlConnection));
+                    _databaseObjects.ForEach(o => o.Create(sqlConnection));
                 }
             }
         }
@@ -1342,13 +1345,13 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
 
         public void Dispose()
         {
-            databaseObjects.Reverse();
-            foreach(string connectionStr in DataTestUtility.AEConnStringsSetup)
+            _databaseObjects.Reverse();
+            foreach (string connectionStr in DataTestUtility.AEConnStringsSetup)
             {
                 using (SqlConnection sqlConnection = new SqlConnection(connectionStr))
                 {
                     sqlConnection.Open();
-                    databaseObjects.ForEach(o => o.Drop(sqlConnection));
+                    _databaseObjects.ForEach(o => o.Drop(sqlConnection));
                 }
             }
         }
@@ -1426,14 +1429,14 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
                 yield return new object[] { connStrAE, SqlDbType.DateTime2, SqlDbType.DateTime2 };
                 yield return new object[] { connStrAE, SqlDbType.DateTimeOffset, SqlDbType.DateTimeOffset };
                 yield return new object[] { connStrAE, SqlDbType.Float, SqlDbType.Float };
-                yield return new object[] { connStrAE, SqlDbType.Real, SqlDbType.Real};
+                yield return new object[] { connStrAE, SqlDbType.Real, SqlDbType.Real };
             }
         }
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
-    
+
     public class TestOutOfRangeValuesData : IEnumerable<object[]>
     {
         public IEnumerator<object[]> GetEnumerator()
