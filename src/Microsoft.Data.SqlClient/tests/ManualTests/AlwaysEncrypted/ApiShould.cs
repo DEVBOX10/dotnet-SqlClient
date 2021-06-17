@@ -2242,6 +2242,97 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             }
         }
 
+        // On Windows, "_fixture" will be type SQLSetupStrategyCertStoreProvider
+        // On non-Windows, "_fixture" will be type SQLSetupStrategyAzureKeyVault
+        // Test will pass on both but only SQLSetupStrategyCertStoreProvider is a system provider
+        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringSetupForAE))]
+        [ClassData(typeof(AEConnectionStringProvider))]
+        public void TestSystemProvidersHavePrecedenceOverInstanceLevelProviders(string connectionString)
+        {
+            Dictionary<string, SqlColumnEncryptionKeyStoreProvider> customKeyStoreProviders = new()
+            {
+                {
+                    SqlColumnEncryptionAzureKeyVaultProvider.ProviderName,
+                    new SqlColumnEncryptionAzureKeyVaultProvider(new SqlClientCustomTokenCredential())
+                }
+            };
+
+            using (SqlConnection connection = new(connectionString))
+            {
+                connection.Open();
+                using SqlCommand command = CreateCommandThatRequiresSystemKeyStoreProvider(connection);
+                connection.RegisterColumnEncryptionKeyStoreProvidersOnConnection(customKeyStoreProviders);
+                command.ExecuteReader();
+            }
+
+            using (SqlConnection connection = new(connectionString))
+            {
+                connection.Open();
+                using SqlCommand command = CreateCommandThatRequiresSystemKeyStoreProvider(connection);
+                command.RegisterColumnEncryptionKeyStoreProvidersOnCommand(customKeyStoreProviders);
+                command.ExecuteReader();
+            }
+        }
+
+        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringSetupForAE), nameof(DataTestUtility.EnclaveEnabled))]
+        [ClassData(typeof(AEConnectionStringProvider))]
+        public void TestRetryWhenAEParameterMetadataCacheIsStale(string connectionString)
+        {
+            CleanUpTable(connectionString, _tableName);
+
+            const int customerId = 50;
+            IList<object> values = GetValues(dataHint: customerId);
+            InsertRows(tableName: _tableName, numberofRows: 1, values: values, connection: connectionString);
+
+            ApiTestTable table = _fixture.ApiTestTable as ApiTestTable;
+            string enclaveSelectQuery = $@"SELECT CustomerId, FirstName, LastName FROM [{_tableName}] WHERE CustomerId > @CustomerId";
+            string alterCekQueryFormatString = "ALTER TABLE [{0}] " +
+                "ALTER COLUMN [CustomerId] [int]  " +
+                "ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = [{1}], " +
+                "ENCRYPTION_TYPE = Randomized, " +
+                "ALGORITHM = 'AEAD_AES_256_CBC_HMAC_SHA_256'); " +
+                "ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE;";
+
+            using SqlConnection sqlConnection = new(connectionString);
+            sqlConnection.Open();
+
+            // execute the select query to add its parameter metadata and enclave-required CEKs to the cache
+            using SqlCommand cmd = new SqlCommand(enclaveSelectQuery, sqlConnection, null, SqlCommandColumnEncryptionSetting.Enabled);
+            cmd.Parameters.AddWithValue("CustomerId", 0);
+            using (SqlDataReader reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    Assert.Equal(customerId, (int)reader[0]);
+                }
+                reader.Close();
+            };
+
+            // change the CEK for the CustomerId column from ColumnEncryptionKey1 to ColumnEncryptionKey2
+            // this will render the select query's cache entry stale
+            cmd.Parameters.Clear();
+            cmd.CommandText = string.Format(alterCekQueryFormatString, _tableName, table.columnEncryptionKey2.Name);
+            cmd.ExecuteNonQuery();
+
+            // execute the select query again. it will attempt to use the stale cache entry, receive 
+            // a retryable error from the server, remove the stale cache entry, retry and succeed
+            cmd.CommandText = enclaveSelectQuery;
+            cmd.Parameters.AddWithValue("@CustomerId", 0);
+            using (SqlDataReader reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    Assert.Equal(customerId, (int)reader[0]);
+                }
+                reader.Close();
+            }
+
+            // revert the CEK change to the CustomerId column
+            cmd.Parameters.Clear();
+            cmd.CommandText = string.Format(alterCekQueryFormatString, _tableName, table.columnEncryptionKey1.Name);
+            cmd.ExecuteNonQuery();
+        }
+
         private void ExecuteQueryThatRequiresCustomKeyStoreProvider(SqlConnection connection)
         {
             using (SqlCommand command = CreateCommandThatRequiresCustomKeyStoreProvider(connection))
@@ -2256,6 +2347,15 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
                 $"SELECT * FROM [{_fixture.CustomKeyStoreProviderTestTable.Name}] WHERE CustomerID = @id",
                 connection, null, SqlCommandColumnEncryptionSetting.Enabled);
             command.Parameters.AddWithValue("id", 9);
+            return command;
+        }
+
+        private SqlCommand CreateCommandThatRequiresSystemKeyStoreProvider(SqlConnection connection)
+        {
+            SqlCommand command = new(
+                    $"SELECT * FROM [{_fixture.CustomKeyStoreProviderTestTable.Name}] WHERE FirstName = @firstName",
+                    connection, null, SqlCommandColumnEncryptionSetting.Enabled);
+            command.Parameters.AddWithValue("firstName", "abc");
             return command;
         }
 

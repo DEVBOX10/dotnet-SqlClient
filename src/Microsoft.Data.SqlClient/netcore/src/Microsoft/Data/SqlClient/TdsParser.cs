@@ -158,6 +158,11 @@ namespace Microsoft.Data.SqlClient
         internal byte TceVersionSupported { get; set; }
 
         /// <summary>
+        /// Server supports retrying when the enclave CEKs sent by the client do not match what is needed for the query to run.
+        /// </summary>
+        internal bool AreEnclaveRetriesSupported { get; set; }
+
+        /// <summary>
         /// Type of enclave being used by the server
         /// </summary>
         internal string EnclaveType { get; set; }
@@ -8837,7 +8842,7 @@ namespace Microsoft.Data.SqlClient
                     bool taskReleaseConnectionLock = releaseConnectionLock;
                     releaseConnectionLock = false;
                     return executeTask.ContinueWith(
-                        (task, state) =>
+                        static (Task task, object state) =>
                         {
                             Debug.Assert(!task.IsCanceled, "Task should not be canceled");
                             var parameters = (Tuple<TdsParser, TdsParserStateObject, SqlInternalConnectionTds>)state;
@@ -9063,7 +9068,7 @@ namespace Microsoft.Data.SqlClient
                                     if (releaseConnectionLock)
                                     {
                                         task.ContinueWith(
-                                             (_, state) => ((SqlInternalConnectionTds)state)._parserLock.Release(),
+                                             static (Task _, object state) => ((SqlInternalConnectionTds)state)._parserLock.Release(),
                                              state: _connHandler,
                                              TaskScheduler.Default
                                          );
