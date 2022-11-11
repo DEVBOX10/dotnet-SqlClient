@@ -87,6 +87,8 @@ namespace Microsoft.Data.SqlClient.Tests
         [InlineData("WSID = myworkstation")]
         [InlineData("Host Name In Certificate = tds.test.com")]
         [InlineData("HostNameInCertificate = tds.test.com")]
+        [InlineData("Server Certificate = c:\\test.cer")]
+        [InlineData("ServerCertificate = c:\\test.cer")]
         [InlineData("Server SPN = server1")]
         [InlineData("ServerSPN = server2")]
         [InlineData("Failover Partner SPN = server3")]
@@ -361,6 +363,17 @@ namespace Microsoft.Data.SqlClient.Tests
         }
 
         [Fact]
+        public void AbleToSetHostNameInCertificate()
+        {
+            var testhostname = "somedomain.net";
+            var builder = new SqlConnectionStringBuilder
+            {
+                HostNameInCertificate = testhostname
+            };
+            Assert.Equal(testhostname, builder.HostNameInCertificate);
+        }
+
+        [Fact]
         public void ConnectionBuilderEncryptBackwardsCompatibility()
         {
             SqlConnectionStringBuilder builder = new();
@@ -383,6 +396,54 @@ namespace Microsoft.Data.SqlClient.Tests
             builder.Encrypt = SqlConnectionEncryptOption.Strict;
             Assert.Equal("Encrypt=Strict", builder.ConnectionString);
             Assert.True(builder.Encrypt);
+
+            builder.Encrypt = null;
+            Assert.Equal("Encrypt=True", builder.ConnectionString);
+            Assert.True(builder.Encrypt);
+        }
+
+        [Theory]
+        [InlineData("true", "True")]
+        [InlineData("mandatory", "True")]
+        [InlineData("yes", "True")]
+        [InlineData("false", "False")]
+        [InlineData("optional", "False")]
+        [InlineData("no", "False")]
+        [InlineData("strict", "Strict")]
+        public void EncryptParserValidValuesParsesSuccessfully(string value, string expectedValue)
+            => Assert.Equal(expectedValue, SqlConnectionEncryptOption.Parse(value).ToString());
+
+        [Theory]
+        [InlineData("something")]
+        [InlineData("")]
+        [InlineData(null)]
+        [InlineData("  true  ")]
+        public void EncryptParserInvalidValuesThrowsException(string value)
+            => Assert.Throws<ArgumentException>(() => SqlConnectionEncryptOption.Parse(value));
+
+        [Theory]
+        [InlineData("true", "True")]
+        [InlineData("mandatory", "True")]
+        [InlineData("yes", "True")]
+        [InlineData("false", "False")]
+        [InlineData("optional", "False")]
+        [InlineData("no", "False")]
+        [InlineData("strict", "Strict")]
+        public void EncryptTryParseValidValuesReturnsTrue(string value, string expectedValue)
+        {
+            Assert.True(SqlConnectionEncryptOption.TryParse(value, out SqlConnectionEncryptOption result));
+            Assert.Equal(expectedValue, result.ToString());
+        }
+
+        [Theory]
+        [InlineData("something")]
+        [InlineData("")]
+        [InlineData(null)]
+        [InlineData("  true  ")]
+        public void EncryptTryParseInvalidValuesReturnsFalse(string value)
+        {
+            Assert.False(SqlConnectionEncryptOption.TryParse(value, out SqlConnectionEncryptOption result));
+            Assert.Null(result);
         }
 
         internal void ExecuteConnectionStringTests(string connectionString)
