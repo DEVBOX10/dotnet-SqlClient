@@ -621,7 +621,6 @@
     <Compile Include="Microsoft\Data\RelationshipConverter.cs" />
     <Compile Include="Microsoft\Data\SqlClient\AlwaysEncryptedKeyConverter.Cng.cs" />
     <Compile Include="Microsoft\Data\SqlClient\assemblycache.cs" />
-    <Compile Include="Microsoft\Data\SqlClient\LocalAppContextSwitches.netfx.cs" />
     <Compile Include="Microsoft\Data\SqlClient\LocalDBAPI.cs" />
     <Compile Include="Microsoft\Data\SqlClient\LocalDBConfig.cs" />
     <Compile Include="Microsoft\Data\SqlClient\Reliability\SqlConfigurableRetryLogicManager.LoadType.cs" />
@@ -709,12 +708,6 @@
     <PackageReference Include="System.Text.Encodings.Web">
       <Version>$(SystemTextEncodingsWebVersion)</Version>
     </PackageReference>
-    <PackageReference Include="System.Security.Cryptography.Algorithms">
-      <Version>$(SystemSecurityCryptographyAlgorithmsVersion)</Version>
-    </PackageReference>
-    <PackageReference Include="System.Security.Cryptography.Primitives">
-      <Version>$(SystemSecurityCryptographyPrimitivesVersion)</Version>
-    </PackageReference>
     <PackageReference Include="Microsoft.Data.SqlClient.SNI">
       <Version>$(MicrosoftDataSqlClientSniVersion)</Version>
       <PrivateAssets>All</PrivateAssets>
@@ -734,9 +727,6 @@
     </PackageReference>
     <PackageReference Include="System.Buffers">
       <Version>$(SystemBuffersVersion)</Version>
-    </PackageReference>
-    <PackageReference Include="System.IO">
-      <Version>$(SystemIOVersion)</Version>
     </PackageReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

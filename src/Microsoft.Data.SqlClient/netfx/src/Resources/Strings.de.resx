@@ -3226,10 +3226,10 @@
     <value>Falls wahr, verwendet SQL Server die SSL-Verschlüsselung für alle Daten, die zwischen Client und Server gesendet werden, wenn auf dem Server ein Zertifikat installiert ist.</value>
   </data>
   <data name="DbConnectionString_HostNameInCertificate" xml:space="preserve">
-    <value>The hostname to be expected in the server's certificate when encryption is negotiated, if it's different from the default value derived from Addr/Address/Server.</value>
+    <value>Der Hostname, der im Serverzertifikat erwartet werden soll, wenn die Verschlüsselung ausgehandelt wird, wenn er sich vom Standardwert unterscheidet, der von Addr/Address/Server abgeleitet wird.</value>
   </data>
   <data name="DbConnectionString_ServerCertificate" xml:space="preserve">
-    <value>The path to a certificate file to match against the SQL Server TLS/SSL certificate.</value>
+    <value>Der Pfad zu einer Zertifikatdatei, die mit dem SQL Server TLS/SSL-Zertifikat übereinstimmt.</value>
   </data>
   <data name="DbConnectionString_Enlist" xml:space="preserve">
     <value>Sitzungen in einer Component Services-Umgebung (oder MTS-Umgebung, wenn Sie mit Microsoft Windows NT arbeiten) müssen den Anforderungen entsprechend automatisch in eine globale Transaktion eingetragen werden.</value>
@@ -4633,6 +4633,15 @@
     <value>Der Dienstprinzipalname (SPN) des Servers.</value>
   </data>
   <data name="SNI_PlatformNotSupportedNetFx" xml:space="preserve">
-    <value>The '{0}' platform is not supported when targeting .NET Framework.</value>
+    <value>Die Plattform "{0}" wird bei .NET Framework nicht unterstützt.</value>
+  </data>
+  <data name="ADP_InvalidMixedUsageOfAccessTokenAndTokenCallback" xml:space="preserve">
+    <value>Cannot set the AccessToken property if the AccessTokenCallback has been set.</value>
+  </data>
+  <data name="ADP_InvalidMixedUsageOfAccessTokenCallbackAndIntegratedSecurity" xml:space="preserve">
+    <value>Cannot set the AccessTokenCallback property if the 'Integrated Security' connection string keyword has been set to 'true' or 'SSPI'.</value>
+  </data>
+  <data name="ADP_InvalidMixedUsageOfAuthenticationAndTokenCallback" xml:space="preserve">
+    <value>Cannot set the AccessTokenCallback property if 'Authentication=Active Directory Default' has been specified in the connection string.</value>
   </data>
 </root>
