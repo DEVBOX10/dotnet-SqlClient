@@ -16,6 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using Microsoft.Data.Common;
+using Microsoft.Data.ProviderBase;
 using Microsoft.Data.Sql;
 using Microsoft.Data.SqlClient.DataClassification;
 using Microsoft.Data.SqlClient.Server;
@@ -361,8 +362,7 @@ namespace Microsoft.Data.SqlClient
         internal void Connect(
             ServerInfo serverInfo,
             SqlInternalConnectionTds connHandler,
-            bool ignoreSniOpenTimeout,
-            long timerExpire,
+            TimeoutTimer timeout,
             SqlConnectionString connectionOptions,
             bool withFailover)
         {
@@ -445,8 +445,7 @@ namespace Microsoft.Data.SqlClient
             // AD Integrated behaves like Windows integrated when connecting to a non-fedAuth server
             _physicalStateObj.CreatePhysicalSNIHandle(
                 serverInfo.ExtendedServerName,
-                ignoreSniOpenTimeout,
-                timerExpire,
+                timeout,
                 out instanceName,
                 ref _sniSpnBuffer,
                 false,
@@ -489,7 +488,7 @@ namespace Microsoft.Data.SqlClient
             }
             _state = TdsParserState.OpenNotLoggedIn;
             _physicalStateObj.SniContext = SniContext.Snix_PreLoginBeforeSuccessfulWrite;
-            _physicalStateObj.TimeoutTime = timerExpire;
+            _physicalStateObj.TimeoutTime = timeout.LegacyTimerExpire;
 
             bool marsCapable = false;
 
@@ -544,8 +543,7 @@ namespace Microsoft.Data.SqlClient
 
                 _physicalStateObj.CreatePhysicalSNIHandle(
                     serverInfo.ExtendedServerName,
-                    ignoreSniOpenTimeout,
-                    timerExpire, out instanceName,
+                    timeout, out instanceName,
                     ref _sniSpnBuffer,
                     true,
                     true,
@@ -1517,20 +1515,17 @@ namespace Microsoft.Data.SqlClient
                 }
                 else
                 {
-
                     if (TdsParserStateObjectFactory.UseManagedSNI)
                     {
-                        // SNI error. Append additional error message info if available.
-                        //
+                        // SNI error. Append additional error message info if available and hasn't been included.
                         string sniLookupMessage = SQL.GetSNIErrorMessage((int)details.sniErrorNumber);
-                        errorMessage = (errorMessage != string.Empty) ?
-                                        (sniLookupMessage + ": " + errorMessage) :
-                                        sniLookupMessage;
+                        errorMessage = (string.IsNullOrEmpty(errorMessage) || errorMessage.Contains(sniLookupMessage))
+                                        ? sniLookupMessage
+                                        : (sniLookupMessage + ": " + errorMessage);
                     }
                     else
                     {
                         // SNI error. Replace the entire message.
-                        //
                         errorMessage = SQL.GetSNIErrorMessage((int)details.sniErrorNumber);
 
                         // If its a LocalDB error, then nativeError actually contains a LocalDB-specific error code, not a win32 error code
@@ -1539,6 +1534,7 @@ namespace Microsoft.Data.SqlClient
                             errorMessage += LocalDBAPI.GetLocalDBMessage((int)details.nativeError);
                             win32ErrorCode = 0;
                         }
+                        SqlClientEventSource.Log.TryAdvancedTraceEvent("<sc.TdsParser.ProcessSNIError |ERR|ADV > Extracting the latest exception from native SNI. errorMessage: {0}", errorMessage);
                     }
                 }
                 errorMessage = string.Format("{0} (provider: {1}, error: {2} - {3})",
@@ -2187,68 +2183,6 @@ namespace Microsoft.Data.SqlClient
                             break;
                         }
 
-                    case TdsEnums.SQLALTMETADATA:
-                        {
-                            stateObj.CloneCleanupAltMetaDataSetArray();
-
-                            if (stateObj._cleanupAltMetaDataSetArray == null)
-                            {
-                                // create object on demand (lazy creation)
-                                stateObj._cleanupAltMetaDataSetArray = new _SqlMetaDataSetCollection();
-                            }
-
-                            _SqlMetaDataSet cleanupAltMetaDataSet;
-                            if (!TryProcessAltMetaData(tokenLength, stateObj, out cleanupAltMetaDataSet))
-                            {
-                                return false;
-                            }
-
-                            stateObj._cleanupAltMetaDataSetArray.SetAltMetaData(cleanupAltMetaDataSet);
-                            if (null != dataStream)
-                            {
-                                byte metadataConsumedByte;
-                                if (!stateObj.TryPeekByte(out metadataConsumedByte))
-                                {
-                                    return false;
-                                }
-                                if (!dataStream.TrySetAltMetaDataSet(cleanupAltMetaDataSet, (TdsEnums.SQLALTMETADATA != metadataConsumedByte)))
-                                {
-                                    return false;
-                                }
-                            }
-
-                            break;
-                        }
-
-                    case TdsEnums.SQLALTROW:
-                        {
-                            if (!stateObj.TryStartNewRow(isNullCompressed: false))
-                            { // altrows are not currently null compressed
-                                return false;
-                            }
-
-                            // read will call run until dataReady. Must not read any data if ReturnImmediately set
-                            if (RunBehavior.ReturnImmediately != (RunBehavior.ReturnImmediately & runBehavior))
-                            {
-                                ushort altRowId;
-                                if (!stateObj.TryReadUInt16(out altRowId))
-                                { // get altRowId
-                                    return false;
-                                }
-
-                                if (!TrySkipRow(stateObj._cleanupAltMetaDataSetArray.GetAltMetaData(altRowId), stateObj))
-                                { // skip altRow
-                                    return false;
-                                }
-                            }
-                            else
-                            {
-                                dataReady = true;
-                            }
-
-                            break;
-                        }
-
                     case TdsEnums.SQLENVCHANGE:
                         {
                             // ENVCHANGE must be processed synchronously (since it can modify the state of many objects)
@@ -2560,6 +2494,69 @@ namespace Microsoft.Data.SqlClient
                             }
                             break;
                         }
+
+                    // deprecated
+                    case TdsEnums.SQLALTMETADATA:
+                        {
+                            stateObj.CloneCleanupAltMetaDataSetArray();
+
+                            if (stateObj._cleanupAltMetaDataSetArray == null)
+                            {
+                                // create object on demand (lazy creation)
+                                stateObj._cleanupAltMetaDataSetArray = new _SqlMetaDataSetCollection();
+                            }
+
+                            _SqlMetaDataSet cleanupAltMetaDataSet;
+                            if (!TryProcessAltMetaData(tokenLength, stateObj, out cleanupAltMetaDataSet))
+                            {
+                                return false;
+                            }
+
+                            stateObj._cleanupAltMetaDataSetArray.SetAltMetaData(cleanupAltMetaDataSet);
+                            if (null != dataStream)
+                            {
+                                byte metadataConsumedByte;
+                                if (!stateObj.TryPeekByte(out metadataConsumedByte))
+                                {
+                                    return false;
+                                }
+                                if (!dataStream.TrySetAltMetaDataSet(cleanupAltMetaDataSet, (TdsEnums.SQLALTMETADATA != metadataConsumedByte)))
+                                {
+                                    return false;
+                                }
+                            }
+
+                            break;
+                        }
+                    case TdsEnums.SQLALTROW:
+                        {
+                            if (!stateObj.TryStartNewRow(isNullCompressed: false))
+                            { // altrows are not currently null compressed
+                                return false;
+                            }
+
+                            // read will call run until dataReady. Must not read any data if ReturnImmediately set
+                            if (RunBehavior.ReturnImmediately != (RunBehavior.ReturnImmediately & runBehavior))
+                            {
+                                ushort altRowId;
+                                if (!stateObj.TryReadUInt16(out altRowId))
+                                { // get altRowId
+                                    return false;
+                                }
+
+                                if (!TrySkipRow(stateObj._cleanupAltMetaDataSetArray.GetAltMetaData(altRowId), stateObj))
+                                { // skip altRow
+                                    return false;
+                                }
+                            }
+                            else
+                            {
+                                dataReady = true;
+                            }
+
+                            break;
+                        }
+
                     default:
                         Debug.Fail("Unhandled token:  " + token.ToString(CultureInfo.InvariantCulture));
                         break;
@@ -4438,6 +4435,9 @@ namespace Microsoft.Data.SqlClient
                         case 0x43f:
                             codePage = 1251;  // Kazakh code page based on SQL Server
                             break;
+                        case 0x10437:
+                            codePage = 1252;  // Georgian code page based on SQL Server
+                            break;
                         default:
                             break;
                     }
@@ -5686,18 +5686,20 @@ namespace Microsoft.Data.SqlClient
                         {
                             char[] cc = null;
                             bool buffIsRented = false;
-                            if (!TryReadPlpUnicodeChars(ref cc, 0, length >> 1, stateObj, out length, supportRentedBuff: true, rentedBuff: ref buffIsRented))
+                            bool result = TryReadPlpUnicodeChars(ref cc, 0, length >> 1, stateObj, out length, supportRentedBuff: true, rentedBuff: ref buffIsRented);
+
+                            if (result)
                             {
-                                return false;
+                                if (length > 0)
+                                {
+                                    s = new string(cc, 0, length);
+                                }
+                                else
+                                {
+                                    s = "";
+                                }
                             }
-                            if (length > 0)
-                            {
-                                s = new string(cc, 0, length);
-                            }
-                            else
-                            {
-                                s = "";
-                            }
+                            
                             if (buffIsRented)
                             {
                                 // do not use clearArray:true on the rented array because it can be massively larger
@@ -5707,6 +5709,11 @@ namespace Microsoft.Data.SqlClient
                                 cc.AsSpan(0, length).Clear();
                                 ArrayPool<char>.Shared.Return(cc, clearArray: false);
                                 cc = null;
+                            }
+
+                            if (!result)
+                            {
+                                return false;
                             }
                         }
                         else
@@ -12609,7 +12616,7 @@ namespace Microsoft.Data.SqlClient
                 return true;       // No data
             }
 
-            Debug.Assert(((ulong)stateObj._longlen != TdsEnums.SQL_PLP_NULL),"Out of sync plp read request");
+            Debug.Assert(((ulong)stateObj._longlen != TdsEnums.SQL_PLP_NULL), "Out of sync plp read request");
 
             Debug.Assert((buff == null && offst == 0) || (buff.Length >= offst + len), "Invalid length sent to ReadPlpUnicodeChars()!");
             charsLeft = len;

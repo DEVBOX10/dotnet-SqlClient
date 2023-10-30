@@ -915,11 +915,11 @@ namespace Microsoft.Data.SqlClient
                     // or if MARS is off, then a datareader exists
                     throw ADP.OpenReaderExists(parser.MARSOn); // MDAC 66411
                 }
-                else if (!parser.MARSOn && parser._physicalStateObj._pendingData)
+                else if (!parser.MARSOn && parser._physicalStateObj.HasPendingData)
                 {
                     parser.DrainData(parser._physicalStateObj);
                 }
-                Debug.Assert(!parser._physicalStateObj._pendingData, "Should not have a busy physicalStateObject at this point!");
+                Debug.Assert(!parser._physicalStateObj.HasPendingData, "Should not have a busy physicalStateObject at this point!");
 
                 parser.RollbackOrphanedAPITransactions();
             }
@@ -1078,7 +1078,7 @@ namespace Microsoft.Data.SqlClient
             // obtains a clone.
 
             Debug.Assert(!HasLocalTransactionFromAPI, "Upon ResetConnection SqlInternalConnectionTds has a currently ongoing local transaction.");
-            Debug.Assert(!_parser._physicalStateObj._pendingData, "Upon ResetConnection SqlInternalConnectionTds has pending data.");
+            Debug.Assert(!_parser._physicalStateObj.HasPendingData, "Upon ResetConnection SqlInternalConnectionTds has pending data.");
 
             if (_fResetConnection)
             {
@@ -1861,7 +1861,6 @@ namespace Microsoft.Data.SqlClient
                     AttemptOneLogin(serverInfo,
                                         newPassword,
                                         newSecurePassword,
-                                        !isParallel,    // ignore timeout for SniOpen call unless MSF , and TNIR
                                         attemptOneLoginTimeout,
                                         isFirstTransparentAttempt: isFirstTransparentAttempt,
                                         disableTnir: disableTnir);
@@ -2137,7 +2136,6 @@ namespace Microsoft.Data.SqlClient
                             currentServerInfo,
                             newPassword,
                             newSecurePassword,
-                            false,          // Use timeout in SniOpen
                             intervalTimer,
                             withFailover: true
                             );
@@ -2175,7 +2173,6 @@ namespace Microsoft.Data.SqlClient
                                 currentServerInfo,
                                 newPassword,
                                 newSecurePassword,
-                                false,          // Use timeout in SniOpen
                                 intervalTimer,
                                 withFailover: true
                                 );
@@ -2293,7 +2290,7 @@ namespace Microsoft.Data.SqlClient
         }
 
         // Common code path for making one attempt to establish a connection and log in to server.
-        private void AttemptOneLogin(ServerInfo serverInfo, string newPassword, SecureString newSecurePassword, bool ignoreSniOpenTimeout, TimeoutTimer timeout, bool withFailover = false, bool isFirstTransparentAttempt = true, bool disableTnir = false)
+        private void AttemptOneLogin(ServerInfo serverInfo, string newPassword, SecureString newSecurePassword, TimeoutTimer timeout, bool withFailover = false, bool isFirstTransparentAttempt = true, bool disableTnir = false)
         {
             SqlClientEventSource.Log.TryAdvancedTraceEvent("<sc.SqlInternalConnectionTds.AttemptOneLogin|ADV> {0}, timout={1}[msec], server={2}", ObjectID, timeout.MillisecondsRemaining, serverInfo.ExtendedServerName);
 
@@ -2303,8 +2300,7 @@ namespace Microsoft.Data.SqlClient
 
             _parser.Connect(serverInfo,
                             this,
-                            ignoreSniOpenTimeout,
-                            timeout.LegacyTimerExpire,
+                            timeout,
                             ConnectionOptions,
                             withFailover,
                             isFirstTransparentAttempt,
