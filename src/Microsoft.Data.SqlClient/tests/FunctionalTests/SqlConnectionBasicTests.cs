@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.SqlServer.TDS.PreLogin;
 using Microsoft.SqlServer.TDS.Servers;
 using Xunit;
 
@@ -36,6 +37,25 @@ namespace Microsoft.Data.SqlClient.Tests
             builder.IntegratedSecurity = true;
             using SqlConnection connection = new SqlConnection(builder.ConnectionString);
             connection.Open();
+        }
+
+        /// <summary>
+        /// Runs a test where TDS Server doesn't send encryption info during pre-login response.
+        /// The driver is expected to fail when that happens, and terminate the connection during pre-login phase 
+        /// when client enables encryption using Encrypt=true or uses default encryption setting.
+        /// </summary>
+        [Fact]
+        public async Task PreLoginEncryptionExcludedTest()
+        {
+            using TestTdsServer server = TestTdsServer.StartTestServer(false, false, 5, excludeEncryption: true);
+            SqlConnectionStringBuilder builder = new(server.ConnectionString)
+            {
+                IntegratedSecurity = true
+            };
+
+            using SqlConnection connection = new(builder.ConnectionString);
+            Exception ex = await Assert.ThrowsAsync<SqlException>(async () => await connection.OpenAsync());
+            Assert.Contains("The instance of SQL Server you attempted to connect to does not support encryption.", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
 
         [ConditionalTheory(typeof(TestUtility), nameof(TestUtility.IsNotArmProcess))]
@@ -241,6 +261,29 @@ namespace Microsoft.Data.SqlClient.Tests
             }
         }
 
+        [Theory]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryIntegrated)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryInteractive)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryDeviceCodeFlow)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryManagedIdentity)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryMSI)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryDefault)]
+        [InlineData(SqlAuthenticationMethod.ActiveDirectoryWorkloadIdentity)]
+        public void ConnectionTestInvalidCredentialAndAuthentication(SqlAuthenticationMethod authentication)
+        {
+            var connectionString = $"Authentication={authentication}";
+
+            using var testPassword = new SecureString();
+            testPassword.MakeReadOnly();
+            var credential = new SqlCredential(string.Empty, testPassword);
+
+            Assert.Throws<ArgumentException>(() => new SqlConnection(connectionString, credential));
+
+            // Attempt to set the credential after creation
+            using var connection = new SqlConnection(connectionString);
+            Assert.Throws<InvalidOperationException>(() => connection.Credential = credential);
+        }
+
         [Fact]
         public void ConnectionTestValidCredentialCombination()
         {
@@ -299,7 +342,7 @@ namespace Microsoft.Data.SqlClient.Tests
         [InlineData(10)]
         [InlineData(5)]
         [InlineData(1)]
-        public async void ConnectionTimeoutTestAsync(int timeout)
+        public async Task ConnectionTimeoutTestAsync(int timeout)
         {
             // Start a server with connection timeout from the inline data.
             using TestTdsServer server = TestTdsServer.StartTestServer(false, false, timeout);
@@ -448,6 +491,38 @@ namespace Microsoft.Data.SqlClient.Tests
                     conn.ConnectionString = authConnStr;
                 });
             }
+        }
+
+        [Theory]
+        [InlineData(9, 0, 2047)] // SQL Server 2005
+        [InlineData(10, 0, 2531)] // SQL Server 2008
+        [InlineData(10, 50, 2500)] // SQL Server 2008 R2
+        [InlineData(11, 0, 3000)] // SQL Server 2012-2022
+        public void ConnectionTestPermittedVersion(int major, int minor, int build)
+        {
+            Version simulatedServerVersion = new Version(major, minor, build);
+            using TestTdsServer server = TestTdsServer.StartTestServer(serverVersion: simulatedServerVersion);
+            using SqlConnection conn = new SqlConnection(server.ConnectionString);
+
+            conn.Open();
+            Assert.Equal(ConnectionState.Open, conn.State);
+
+            Version returnedServerVersion = Version.Parse(conn.ServerVersion);
+
+            Assert.Equal(simulatedServerVersion, returnedServerVersion);
+        }
+
+        [Theory]
+        [InlineData(7, 0, 623)] // SQL Server 7.0
+        [InlineData(8, 0, 194)] // SQL Server 2000 RTM
+        [InlineData(8, 0, 384)] // SQL Server 2000 SP1
+        public void ConnectionTestDeniedVersion(int major, int minor, int build)
+        {
+            Version simulatedServerVersion = new Version(major, minor, build);
+            using TestTdsServer server = TestTdsServer.StartTestServer(serverVersion: simulatedServerVersion);
+            using SqlConnection conn = new SqlConnection(server.ConnectionString);
+
+            Assert.Throws<InvalidOperationException>(() => conn.Open());
         }
     }
 }

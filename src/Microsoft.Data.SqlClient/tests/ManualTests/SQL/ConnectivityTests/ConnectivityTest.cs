@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Microsoft.Data.SqlClient.ManualTesting.Tests
@@ -87,7 +88,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         }
 
         [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup))]
-        public static async void ConnectionTimeoutInfiniteTest()
+        public static async Task ConnectionTimeoutInfiniteTest()
         {
             // Exercise the special-case infinite connect timeout code path
             SqlConnectionStringBuilder builder = new(DataTestUtility.TCPConnectionString)
@@ -360,14 +361,16 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             }
         }
 
-        [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup))]
+        // ConnectionOpenDisableRetry relies on error 4060 for automatic retry, which is not returned when using AAD auth
+        [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsNotAzureServer), nameof(DataTestUtility.TcpConnectionStringDoesNotUseAadAuth))]
         public static void ConnectionOpenDisableRetry()
         {
             SqlConnectionStringBuilder connectionStringBuilder = new(DataTestUtility.TCPConnectionString)
             {
                 InitialCatalog = "DoesNotExist0982532435423",
                 Pooling = false,
-                ConnectTimeout = 15
+                ConnectTimeout = 15,
+                ConnectRetryCount = 3
             };
             using SqlConnection sqlConnection = new(connectionStringBuilder.ConnectionString);
             Stopwatch timer = new();
@@ -382,7 +385,33 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             Assert.Throws<SqlException>(() => sqlConnection.Open());
             timer.Stop();
             duration = timer.Elapsed;
-            Assert.True(duration.Seconds > 5, $"Connection Open() with retries took less time than expected. Expect > 5 sec with transient fault handling. Took {duration.Seconds} sec.");                //    sqlConnection.Open();
+            Assert.True(duration.Seconds > 5, $"Connection Open() with retries took less time than expected. Expect > 5 sec with transient fault handling. Took {duration.Seconds} sec.");                  //    sqlConnection.Open();
+        }
+
+        [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsNotAzureServer), nameof(DataTestUtility.TcpConnectionStringDoesNotUseAadAuth))]
+        public static async Task ConnectionOpenAsyncDisableRetry()
+        {
+            SqlConnectionStringBuilder connectionStringBuilder = new(DataTestUtility.TCPConnectionString)
+            {
+                InitialCatalog = DataTestUtility.GetUniqueNameForSqlServer("DoesNotExist", false),
+                Pooling = false,
+                ConnectTimeout = 15,
+                ConnectRetryCount = 3
+            };
+            using SqlConnection sqlConnection = new(connectionStringBuilder.ConnectionString);
+            Stopwatch timer = new();
+
+            timer.Start();
+            await Assert.ThrowsAsync<SqlException>(async () => await sqlConnection.OpenAsync(SqlConnectionOverrides.OpenWithoutRetry, CancellationToken.None));
+            timer.Stop();
+            TimeSpan duration = timer.Elapsed;
+            Assert.True(duration.Seconds < 2, $"Connection OpenAsync() without retries took longer than expected. Expected < 2 sec. Took {duration.Seconds} sec.");
+
+            timer.Restart();
+            await Assert.ThrowsAsync<SqlException>(async () => await sqlConnection.OpenAsync(CancellationToken.None));
+            timer.Stop();
+            duration = timer.Elapsed;
+            Assert.True(duration.Seconds > 5, $"Connection OpenAsync() with retries took less time than expected. Expect > 5 sec with transient fault handling. Took {duration.Seconds} sec.");
         }
 
         [PlatformSpecific(TestPlatforms.Windows)]
@@ -440,6 +469,63 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             b.DataSource = "admin:localhost";
             using SqlConnection sqlConnection = new(b.ConnectionString);
             sqlConnection.Open();
+        }
+
+        private static bool UsernamePasswordNonEncryptedConnectionSetup()
+        {
+            if (!DataTestUtility.IsTCPConnStringSetup())
+            {
+                return false;
+            }
+
+            SqlConnectionStringBuilder b = new(DataTestUtility.TCPConnectionString);
+            return !string.IsNullOrEmpty(b.UserID) &&
+                !string.IsNullOrEmpty(b.Password) &&
+                b.Encrypt == SqlConnectionEncryptOption.Optional &&
+                (b.Authentication == SqlAuthenticationMethod.NotSpecified || b.Authentication == SqlAuthenticationMethod.SqlPassword);
+        }
+
+        [ConditionalFact(nameof(UsernamePasswordNonEncryptedConnectionSetup))]
+        public static void SqlPasswordConnectionTest()
+        {
+            if (!UsernamePasswordNonEncryptedConnectionSetup())
+            {
+                throw new Exception("Sql credentials and non-Encrypted connection required.");
+            }
+
+            SqlConnectionStringBuilder b = new(DataTestUtility.TCPConnectionString);
+            b.Authentication = SqlAuthenticationMethod.SqlPassword;
+
+            // This ensures we are not validating the server certificate when we shouldn't be
+            // This test may fail if Encrypt = false but the test server requires encryption
+            b.TrustServerCertificate = false;
+
+            using SqlConnection sqlConnection = new(b.ConnectionString);
+            sqlConnection.Open();
+        }
+
+        [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsNotAzureSynapse))]
+        public static void ConnectionFireInfoMessageEventOnUserErrorsShouldSucceed()
+        {
+            using (var connection = new SqlConnection(DataTestUtility.TCPConnectionString))
+            {
+                string command = "print";
+                string commandParam = "OK";
+
+                connection.FireInfoMessageEventOnUserErrors = true;
+
+                connection.InfoMessage += (sender, args) =>
+                {
+                    Assert.Equal(commandParam, args.Message);
+                };
+
+                connection.Open();
+
+                using SqlCommand cmd = connection.CreateCommand();
+                cmd.CommandType = System.Data.CommandType.Text;
+                cmd.CommandText = $"{command} '{commandParam}'";
+                cmd.ExecuteNonQuery();
+            }
         }
     }
 }

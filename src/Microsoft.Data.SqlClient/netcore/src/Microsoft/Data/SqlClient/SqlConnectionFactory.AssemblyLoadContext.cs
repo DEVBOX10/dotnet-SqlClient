@@ -8,7 +8,7 @@ using System.Runtime.Loader;
 
 namespace Microsoft.Data.SqlClient
 {
-    sealed internal partial class SqlConnectionFactory
+    internal sealed partial class SqlConnectionFactory
     { 
         partial void SubscribeToAssemblyLoadContextUnload()
         {

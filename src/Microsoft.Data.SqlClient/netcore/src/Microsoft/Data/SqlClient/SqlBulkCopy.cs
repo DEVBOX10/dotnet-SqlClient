@@ -385,7 +385,7 @@ namespace Microsoft.Data.SqlClient
         {
             get
             {
-                if (null != _connection)
+                if (_connection != null)
                 {
                     if (_connection.StatisticsEnabled)
                     {
@@ -540,7 +540,7 @@ namespace Microsoft.Data.SqlClient
 
             isInTransaction = _connection.HasLocalTransaction;
             // Throw if there is a transaction but no flag is set
-            if (isInTransaction && null == _externalTransaction && null == _internalTransaction && (_connection.Parser != null && _connection.Parser.CurrentTransaction != null && _connection.Parser.CurrentTransaction.IsLocal))
+            if (isInTransaction && _externalTransaction == null && _internalTransaction == null && (_connection.Parser != null && _connection.Parser.CurrentTransaction != null && _connection.Parser.CurrentTransaction.IsLocal))
             {
                 throw SQL.BulkLoadExistingTransaction();
             }
@@ -596,6 +596,10 @@ namespace Microsoft.Data.SqlClient
                         {
                             AppendColumnNameAndTypeName(updateBulkCommandText, metadata.column, "varbinary");
                         }
+                        else if (metadata.type == SqlDbTypeExtensions.Json)
+                        {
+                            AppendColumnNameAndTypeName(updateBulkCommandText, metadata.column, "json");
+                        }
                         else
                         {
                             AppendColumnNameAndTypeName(updateBulkCommandText, metadata.column, metadata.type.ToString());
@@ -645,7 +649,7 @@ namespace Microsoft.Data.SqlClient
                                         }
                                         updateBulkCommandText.AppendFormat((IFormatProvider)null, "({0})", size);
                                     }
-                                    else if (metadata.metaType.IsPlp && metadata.metaType.SqlDbType != SqlDbType.Xml)
+                                    else if (metadata.metaType.IsPlp && metadata.metaType.SqlDbType != SqlDbType.Xml && metadata.metaType.SqlDbType != SqlDbTypeExtensions.Json)
                                     {
                                         // Partial length column prefix (max)
                                         updateBulkCommandText.Append("(max)");
@@ -683,7 +687,7 @@ namespace Microsoft.Data.SqlClient
                             {
                                 updateBulkCommandText.Append(" COLLATE " + collation_name.Value);
                                 // Compare collations only if the collation value was set on the metadata
-                                if (null != _sqlDataReaderRowSource && metadata.collation != null)
+                                if (_sqlDataReaderRowSource != null && metadata.collation != null)
                                 {
                                     // On SqlDataReader we can verify the sourcecolumn collation!
                                     int sourceColumnId = _localColumnMappings[assocId]._internalSourceColumnOrdinal;
@@ -847,7 +851,7 @@ namespace Microsoft.Data.SqlClient
                     try
                     {
                         Debug.Assert(_internalTransaction == null, "Internal transaction exists during dispose");
-                        if (null != _internalTransaction)
+                        if (_internalTransaction != null)
                         {
                             _internalTransaction.Rollback();
                             _internalTransaction.Dispose();
@@ -922,7 +926,7 @@ namespace Microsoft.Data.SqlClient
                         }
                     }
                     // SqlDataReader-specific logic
-                    else if (null != _sqlDataReaderRowSource)
+                    else if (_sqlDataReaderRowSource != null)
                     {
                         if (_currentRowMetadata[destRowIndex].IsSqlType)
                         {
@@ -1213,7 +1217,7 @@ namespace Microsoft.Data.SqlClient
                 }
             }
             // Check for data streams
-            else if ((_enableStreaming) && (metadata.length == MAX_LENGTH))
+            else if ((_enableStreaming) && ((metadata.length == MAX_LENGTH) || metadata.type == SqlDbTypeExtensions.Json))
             {
                 isSqlType = false;
 
@@ -1229,7 +1233,7 @@ namespace Microsoft.Data.SqlClient
                         method = ValueMethod.DataFeedStream;
                     }
                     // For text and XML there is memory gain from streaming on destination side even if reader is non-sequential
-                    else if (((metadata.type == SqlDbType.VarChar) || (metadata.type == SqlDbType.NVarChar)) && (mtSource.IsCharType) && (mtSource.SqlDbType != SqlDbType.Xml))
+                    else if (((metadata.type == SqlDbType.VarChar) || (metadata.type == SqlDbType.NVarChar || metadata.type == SqlDbTypeExtensions.Json)) && (mtSource.IsCharType) && (mtSource.SqlDbType != SqlDbType.Xml))
                     {
                         isDataFeed = true;
                         method = ValueMethod.DataFeedText;
@@ -1281,7 +1285,7 @@ namespace Microsoft.Data.SqlClient
 
         private void CreateOrValidateConnection(string method)
         {
-            if (null == _connection)
+            if (_connection == null)
             {
                 throw ADP.ConnectionRequired(method);
             }
@@ -1297,7 +1301,7 @@ namespace Microsoft.Data.SqlClient
             // If we have a transaction, check to ensure that the active
             // connection property matches the connection associated with
             // the transaction.
-            if (null != _externalTransaction && _connection != _externalTransaction.Connection)
+            if (_externalTransaction != null && _connection != _externalTransaction.Connection)
             {
                 throw ADP.TransactionConnectionMismatch();
             }
@@ -1340,7 +1344,7 @@ namespace Microsoft.Data.SqlClient
 
         private void CommitTransaction()
         {
-            if (null != _internalTransaction)
+            if (_internalTransaction != null)
             {
                 SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
                 internalConnection.ThreadHasParserLockForClose = true; // In case of error, let the connection know that we have the lock
@@ -1590,6 +1594,7 @@ namespace Microsoft.Data.SqlClient
                         }
                         break;
                     case TdsEnums.SQLXMLTYPE:
+                    case TdsEnums.SQLJSON:
                         // Could be either string, SqlCachedBuffer, XmlReader or XmlDataFeed
                         Debug.Assert((value is XmlReader) || (value is SqlCachedBuffer) || (value is string) || (value is SqlString) || (value is XmlDataFeed), "Invalid value type of Xml datatype");
                         if (value is XmlReader)
@@ -1640,14 +1645,12 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _dbDataReaderRowSource = reader;
                 _sqlDataReaderRowSource = reader as SqlDataReader;
-
-                _dataTableSource = null;
                 _rowSourceType = ValueSourceType.DbDataReader;
 
-                _isAsyncBulkCopy = false;
                 WriteRowSourceToServerAsync(reader.FieldCount, CancellationToken.None); //It returns null since _isAsyncBulkCopy = false;
             }
             finally
@@ -1673,12 +1676,11 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _sqlDataReaderRowSource = _rowSource as SqlDataReader;
                 _dbDataReaderRowSource = _rowSource as DbDataReader;
-                _dataTableSource = null;
                 _rowSourceType = ValueSourceType.IDataReader;
-                _isAsyncBulkCopy = false;
                 WriteRowSourceToServerAsync(reader.FieldCount, CancellationToken.None); //It returns null since _isAsyncBulkCopy = false;
             }
             finally
@@ -1707,13 +1709,12 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowStateToSkip = ((rowState == 0) || (rowState == DataRowState.Deleted)) ? DataRowState.Deleted : ~rowState | DataRowState.Deleted;
                 _rowSource = table;
                 _dataTableSource = table;
-                _sqlDataReaderRowSource = null;
                 _rowSourceType = ValueSourceType.DataTable;
                 _rowEnumerator = table.Rows.GetEnumerator();
-                _isAsyncBulkCopy = false;
 
                 WriteRowSourceToServerAsync(table.Columns.Count, CancellationToken.None); //It returns null since _isAsyncBulkCopy = false;
             }
@@ -1746,16 +1747,14 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-
+                ResetWriteToServerGlobalVariables();
                 DataTable table = rows[0].Table;
-                Debug.Assert(null != table, "How can we have rows without a table?");
+                Debug.Assert(table != null, "How can we have rows without a table?");
                 _rowStateToSkip = DataRowState.Deleted;      // Don't allow deleted rows
                 _rowSource = rows;
                 _dataTableSource = table;
-                _sqlDataReaderRowSource = null;
                 _rowSourceType = ValueSourceType.RowArray;
                 _rowEnumerator = rows.GetEnumerator();
-                _isAsyncBulkCopy = false;
 
                 WriteRowSourceToServerAsync(table.Columns.Count, CancellationToken.None); //It returns null since _isAsyncBulkCopy = false;
             }
@@ -1787,7 +1786,7 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-
+                ResetWriteToServerGlobalVariables();
                 if (rows.Length == 0)
                 {
                     return cancellationToken.IsCancellationRequested ?
@@ -1796,11 +1795,10 @@ namespace Microsoft.Data.SqlClient
                 }
 
                 DataTable table = rows[0].Table;
-                Debug.Assert(null != table, "How can we have rows without a table?");
+                Debug.Assert(table != null, "How can we have rows without a table?");
                 _rowStateToSkip = DataRowState.Deleted; // Don't allow deleted rows
                 _rowSource = rows;
                 _dataTableSource = table;
-                _sqlDataReaderRowSource = null;
                 _rowSourceType = ValueSourceType.RowArray;
                 _rowEnumerator = rows.GetEnumerator();
                 _isAsyncBulkCopy = true;
@@ -1834,10 +1832,10 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _sqlDataReaderRowSource = reader as SqlDataReader;
                 _dbDataReaderRowSource = reader;
-                _dataTableSource = null;
                 _rowSourceType = ValueSourceType.DbDataReader;
                 _isAsyncBulkCopy = true;
                 resultTask = WriteRowSourceToServerAsync(reader.FieldCount, cancellationToken); // It returns Task since _isAsyncBulkCopy = true;
@@ -1871,10 +1869,10 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _sqlDataReaderRowSource = _rowSource as SqlDataReader;
                 _dbDataReaderRowSource = _rowSource as DbDataReader;
-                _dataTableSource = null;
                 _rowSourceType = ValueSourceType.IDataReader;
                 _isAsyncBulkCopy = true;
                 resultTask = WriteRowSourceToServerAsync(reader.FieldCount, cancellationToken); // It returns Task since _isAsyncBulkCopy = true;
@@ -1914,9 +1912,9 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
+                ResetWriteToServerGlobalVariables();
                 _rowStateToSkip = ((rowState == 0) || (rowState == DataRowState.Deleted)) ? DataRowState.Deleted : ~rowState | DataRowState.Deleted;
                 _rowSource = table;
-                _sqlDataReaderRowSource = null;
                 _dataTableSource = table;
                 _rowSourceType = ValueSourceType.DataTable;
                 _rowEnumerator = table.Rows.GetEnumerator();
@@ -3092,6 +3090,18 @@ namespace Microsoft.Data.SqlClient
                 }
             }
             return resultTask;
+        }
+
+        private void ResetWriteToServerGlobalVariables()
+        {
+            _dataTableSource = null;
+            _dbDataReaderRowSource = null;
+            _isAsyncBulkCopy = false;
+            _rowEnumerator = null;
+            _rowSource = null;
+            _rowSourceType = ValueSourceType.Unspecified;
+            _sqlDataReaderRowSource = null;
+            _sqlDataReaderRowSource = null;
         }
     }
 }
