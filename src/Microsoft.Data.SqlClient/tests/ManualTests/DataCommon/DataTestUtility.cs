@@ -454,7 +454,18 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         public static bool IsNotAzureServer()
         {
-            return !AreConnStringsSetup() || !Utils.IsAzureSqlServer(new SqlConnectionStringBuilder((TCPConnectionString)).DataSource);
+            return !AreConnStringsSetup() || !Utils.IsAzureSqlServer(new SqlConnectionStringBuilder(TCPConnectionString).DataSource);
+        }
+
+        public static bool IsNotNamedInstance()
+        {
+            return !AreConnStringsSetup() || !new SqlConnectionStringBuilder(TCPConnectionString).DataSource.Contains(@"\");
+        }
+
+        public static bool IsLocalHost()
+        {
+            SqlConnectionStringBuilder builder = new(DataTestUtility.TCPConnectionString);
+            return ParseDataSource(builder.DataSource, out string hostname, out _, out _) && string.Equals("localhost", hostname, StringComparison.OrdinalIgnoreCase);
         }
 
         // Synapse: Always Encrypted is not supported with Azure Synapse.
@@ -599,6 +610,17 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             using (SqlCommand command = sqlConnection.CreateCommand())
             {
                 command.CommandText = tableCreate;
+                command.ExecuteNonQuery();
+            }
+        }
+
+        public static void CreateSP(SqlConnection sqlConnection, string spName, string spBody)
+        {
+            DropStoredProcedure(sqlConnection, spName);
+            string spCreate = "CREATE PROCEDURE " + spName + spBody;
+            using (SqlCommand command = sqlConnection.CreateCommand())
+            {
+                command.CommandText = spCreate;
                 command.ExecuteNonQuery();
             }
         }

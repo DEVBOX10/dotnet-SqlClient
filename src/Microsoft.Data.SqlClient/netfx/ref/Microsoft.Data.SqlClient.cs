@@ -1039,6 +1039,7 @@ namespace Microsoft.Data.SqlClient
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/DataSource/*'/>
         [System.ComponentModel.DisplayNameAttribute("Data Source")]
         [System.ComponentModel.RefreshPropertiesAttribute(System.ComponentModel.RefreshProperties.All)]
+        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter")]
         public string DataSource { get { throw null; } set { } }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/EnclaveAttestationUrl/*'/>
         [System.ComponentModel.DisplayNameAttribute("Enclave Attestation Url")]
@@ -1072,6 +1073,7 @@ namespace Microsoft.Data.SqlClient
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/FailoverPartner/*'/>
         [System.ComponentModel.DisplayNameAttribute("Failover Partner")]
         [System.ComponentModel.RefreshPropertiesAttribute(System.ComponentModel.RefreshProperties.All)]
+        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter")]
         public string FailoverPartner { get { throw null; } set { } }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/FailoverPartnerSPN/*'/>
         [System.ComponentModel.DisplayNameAttribute("Failover Partner SPN")]
@@ -1355,6 +1357,8 @@ namespace Microsoft.Data.SqlClient
         public virtual System.Data.SqlTypes.SqlInt32 GetSqlInt32(int i) { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlInt64/*'/>
         public virtual System.Data.SqlTypes.SqlInt64 GetSqlInt64(int i) { throw null; }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlJson/*' />
+        virtual public Microsoft.Data.SqlTypes.SqlJson GetSqlJson(int i) { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlMoney/*'/>
         public virtual System.Data.SqlTypes.SqlMoney GetSqlMoney(int i) { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlSingle/*'/>
@@ -2405,7 +2409,5 @@ namespace Microsoft.Data.SqlTypes
         public static SqlJson Null => throw null;
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlJson.xml' path='docs/members[@name="SqlJson"]/Value/*' />
         public string Value { get { throw null; } }
-        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlJson.xml' path='docs/members[@name="SqlJson"]/GetSqlJson/*' />
-        virtual public SqlJson GetSqlJson(int i) { throw null; }
     }
 }
