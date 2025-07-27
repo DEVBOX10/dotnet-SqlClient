@@ -543,31 +543,24 @@ namespace Microsoft.Data.SqlClient
 
         private IPublicClientApplication CreateClientAppInstance(PublicClientAppKey publicClientAppKey)
         {
-            IPublicClientApplication publicClientApplication;
-
-#if NETFRAMEWORK
-            if (_iWin32WindowFunc != null)
+            PublicClientApplicationBuilder builder = PublicClientApplicationBuilder
+                .CreateWithApplicationOptions(new PublicClientApplicationOptions
+                {
+                    ClientId = publicClientAppKey._applicationClientId,
+                    ClientName = DbConnectionStringDefaults.ApplicationName,
+                    ClientVersion = Common.ADP.GetAssemblyVersion().ToString(),
+                    RedirectUri = publicClientAppKey._redirectUri,
+                })
+                .WithAuthority(publicClientAppKey._authority);
+            
+            #if NETFRAMEWORK
+            if (_iWin32WindowFunc is not null)
             {
-                publicClientApplication = PublicClientApplicationBuilder.Create(publicClientAppKey._applicationClientId)
-                .WithAuthority(publicClientAppKey._authority)
-                .WithClientName(DbConnectionStringDefaults.ApplicationName)
-                .WithClientVersion(Common.ADP.GetAssemblyVersion().ToString())
-                .WithRedirectUri(publicClientAppKey._redirectUri)
-                .WithParentActivityOrWindow(_iWin32WindowFunc)
-                .Build();
+                builder.WithParentActivityOrWindow(_iWin32WindowFunc);
             }
-            else
-#endif
-            {
-                publicClientApplication = PublicClientApplicationBuilder.Create(publicClientAppKey._applicationClientId)
-                .WithAuthority(publicClientAppKey._authority)
-                .WithClientName(DbConnectionStringDefaults.ApplicationName)
-                .WithClientVersion(Common.ADP.GetAssemblyVersion().ToString())
-                .WithRedirectUri(publicClientAppKey._redirectUri)
-                .Build();
-            }
+            #endif
 
-            return publicClientApplication;
+            return builder.Build();
         }
 
         private static TokenCredentialData CreateTokenCredentialInstance(TokenCredentialKey tokenCredentialKey, string secret)
@@ -589,6 +582,18 @@ namespace Microsoft.Data.SqlClient
                     defaultAzureCredentialOptions.WorkloadIdentityClientId = tokenCredentialKey._clientId;
                 }
 
+                // SqlClient is a library and provides support to acquire access
+                // token using 'DefaultAzureCredential' on user demand when they
+                // specify 'Authentication = Active Directory Default' in
+                // connection string.
+                //
+                // CodeQL Suppression - do not modify this comment:
+                //
+                // CodeQL [SM05137] Default Azure Credential is instantiated by
+                // the calling application when using "Active Directory Default"
+                // authentication code to connect to Azure SQL instance.
+                // SqlClient is a library, doesn't instantiate the credential
+                // without running application instructions.
                 return new TokenCredentialData(new DefaultAzureCredential(defaultAzureCredentialOptions), GetHash(secret));
             }
 

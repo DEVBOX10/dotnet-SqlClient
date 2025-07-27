@@ -6,7 +6,6 @@
 // New attributes that are designed to work with Microsoft.Data.SqlClient and are publicly documented should be included in future.
 
 [assembly: System.CLSCompliant(true)]
-[assembly: System.Resources.NeutralResourcesLanguageAttribute("en-US")]
 namespace Microsoft.Data
 {
     /// <include file='../../../../doc/snippets/Microsoft.Data/OperationAbortedException.xml' path='docs/members[@name="OperationAbortedException"]/OperationAbortedException/*' />
@@ -24,6 +23,8 @@ namespace Microsoft.Data
     {
         /// <include file='../../../../doc/snippets/Microsoft.Data/SqlDbTypeExtensions.xml' path='docs/members[@name="SqlDbTypeExtensions"]/SqlJson[@name="default"]' />
         public const System.Data.SqlDbType Json = (System.Data.SqlDbType)35;
+        /// <include file='../../../../doc/snippets/Microsoft.Data/SqlDbTypeExtensions.xml' path='docs/members[@name="SqlDbTypeExtensions"]/SqlVector[@name="default"]' />
+        public const System.Data.SqlDbType Vector = (System.Data.SqlDbType)36;
     }
 }
 
@@ -1039,7 +1040,7 @@ namespace Microsoft.Data.SqlClient
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/DataSource/*'/>
         [System.ComponentModel.DisplayNameAttribute("Data Source")]
         [System.ComponentModel.RefreshPropertiesAttribute(System.ComponentModel.RefreshProperties.All)]
-        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter")]
+        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter, Microsoft.Data.SqlClient")]
         public string DataSource { get { throw null; } set { } }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/EnclaveAttestationUrl/*'/>
         [System.ComponentModel.DisplayNameAttribute("Enclave Attestation Url")]
@@ -1073,7 +1074,7 @@ namespace Microsoft.Data.SqlClient
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/FailoverPartner/*'/>
         [System.ComponentModel.DisplayNameAttribute("Failover Partner")]
         [System.ComponentModel.RefreshPropertiesAttribute(System.ComponentModel.RefreshProperties.All)]
-        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter")]
+        [System.ComponentModel.TypeConverter("Microsoft.Data.SqlClient.SqlConnectionStringBuilder+SqlDataSourceConverter, Microsoft.Data.SqlClient")]
         public string FailoverPartner { get { throw null; } set { } }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlConnectionStringBuilder.xml' path='docs/members[@name="SqlConnectionStringBuilder"]/FailoverPartnerSPN/*'/>
         [System.ComponentModel.DisplayNameAttribute("Failover Partner SPN")]
@@ -1369,6 +1370,8 @@ namespace Microsoft.Data.SqlClient
         public virtual object GetSqlValue(int i) { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlValues/*'/>
         public virtual int GetSqlValues(object[] values) { throw null; }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlVector/*'/>
+        public virtual Microsoft.Data.SqlTypes.SqlVector<T> GetSqlVector<T>(int i) where T : unmanaged { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSqlXml/*'/>
         public virtual System.Data.SqlTypes.SqlXml GetSqlXml(int i) { throw null; }
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlClient/SqlDataReader.xml' path='docs/members[@name="SqlDataReader"]/GetSchemaTable/*'/>
@@ -2409,5 +2412,25 @@ namespace Microsoft.Data.SqlTypes
         public static SqlJson Null => throw null;
         /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlJson.xml' path='docs/members[@name="SqlJson"]/Value/*' />
         public string Value { get { throw null; } }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlJson.xml' path='docs/members[@name="SqlJson"]/ToString/*' />
+        public override string ToString() { throw null; }
+    }
+
+    /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/SqlVector/*' />
+    public readonly struct SqlVector<T> : System.Data.SqlTypes.INullable
+    where T : unmanaged
+    {
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/ctor1/*' />
+        public SqlVector(System.ReadOnlyMemory<T> memory) { }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/IsNull/*' />
+        public bool IsNull => throw null;
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/Null/*' />
+        public static SqlVector<T> Null => throw null;
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/Length/*' />
+        public int Length { get { throw null; } }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/Memory/*' />
+        public System.ReadOnlyMemory<T> Memory { get { throw null; } }
+        /// <include file='../../../../doc/snippets/Microsoft.Data.SqlTypes/SqlVector.xml' path='docs/members[@name="SqlVector"]/CreateNull/*' />
+        public static SqlVector<T> CreateNull(int length) { throw null; }
     }
 }

@@ -2,22 +2,23 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
+using System.Data;
+using System.Data.Common;
+using System.Diagnostics;
+using System.Runtime.ConstrainedExecution;
+using System.Threading;
+using System.Transactions;
+using Microsoft.Data.Common;
+using Microsoft.Data.Common.ConnectionString;
+using Microsoft.Data.ProviderBase;
+using Microsoft.Data.SqlClient.ConnectionPool;
+
 namespace Microsoft.Data.SqlClient
 {
-    using System;
-    using System.Data;
-    using System.Data.Common;
-    using System.Diagnostics;
-    using System.Runtime.ConstrainedExecution;
-    using System.Threading;
-    using System.Transactions;
-    using Microsoft.Data.Common;
-    using Microsoft.Data.ProviderBase;
-    using Microsoft.Data.SqlClient.ConnectionPool;
-
     public sealed partial class SqlConnection : DbConnection
     {
-        private static readonly DbConnectionFactory _connectionFactory = SqlConnectionFactory.SingletonInstance;
+        private static readonly SqlConnectionFactory _connectionFactory = SqlConnectionFactory.Instance;
         internal static readonly System.Security.CodeAccessPermission ExecutePermission = SqlConnection.CreateExecutePermission();
 
         private DbConnectionOptions _userConnectionOptions;
@@ -68,7 +69,7 @@ namespace Microsoft.Data.SqlClient
             }
         }
 
-        internal DbConnectionFactory ConnectionFactory
+        internal SqlConnectionFactory ConnectionFactory
         {
             get
             {
@@ -202,8 +203,7 @@ namespace Microsoft.Data.SqlClient
         {
             using (TryEventScope.Create("<prov.DbConnectionHelper.CreateDbCommand|API> {0}", ObjectID))
             {
-                DbProviderFactory providerFactory = ConnectionFactory.ProviderFactory;
-                DbCommand command = providerFactory.CreateCommand();
+                DbCommand command = SqlClientFactory.Instance.CreateCommand();
                 command.Connection = this;
                 return command;
             }
@@ -211,8 +211,8 @@ namespace Microsoft.Data.SqlClient
 
         private static System.Security.CodeAccessPermission CreateExecutePermission()
         {
-            DBDataPermission p = (DBDataPermission)SqlConnectionFactory.SingletonInstance.ProviderFactory.CreatePermission(System.Security.Permissions.PermissionState.None);
-            p.Add(String.Empty, String.Empty, KeyRestrictionBehavior.AllowOnly);
+            DBDataPermission p = (DBDataPermission)SqlClientFactory.Instance.CreatePermission(System.Security.Permissions.PermissionState.None);
+            p.Add(string.Empty, string.Empty, KeyRestrictionBehavior.AllowOnly);
             return p;
         }
 

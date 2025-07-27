@@ -8,8 +8,11 @@ using System.Collections.Generic;
 using System.Data;
 using System.Data.SqlTypes;
 using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 using System.Globalization;
+using Microsoft.Data.SqlClient.Tests.Common;
+
 
 #if !NETFRAMEWORK
 using Microsoft.SqlServer.Types;
@@ -569,13 +572,16 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ClassData(typeof(ConnectionStringsProvider))]
         public static void TestScaledDecimalParameter_CommandInsert(string connectionString, bool truncateScaledDecimal)
         {
+            using LocalAppContextSwitchesHelper appContextSwitchesHelper = new();
+
             string tableName = DataTestUtility.GetUniqueNameForSqlServer("TestDecimalParameterCMD");
             using SqlConnection connection = InitialDatabaseTable(connectionString, tableName);
             try
             {
                 using (SqlCommand cmd = connection.CreateCommand())
                 {
-                    AppContext.SetSwitch(TruncateDecimalSwitch, truncateScaledDecimal);
+                    appContextSwitchesHelper.TruncateScaledDecimalField = truncateScaledDecimal ? LocalAppContextSwitchesHelper.Tristate.True : LocalAppContextSwitchesHelper.Tristate.False;
+
                     var p = new SqlParameter("@Value", null)
                     {
                         Precision = 18,
@@ -601,6 +607,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ClassData(typeof(ConnectionStringsProvider))]
         public static void TestScaledDecimalParameter_BulkCopy(string connectionString, bool truncateScaledDecimal)
         {
+            using LocalAppContextSwitchesHelper appContextSwitchesHelper = new();
+
             string tableName = DataTestUtility.GetUniqueNameForSqlServer("TestDecimalParameterBC");
             using SqlConnection connection = InitialDatabaseTable(connectionString, tableName);
             try
@@ -619,7 +627,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     }
 
                     bulkCopy.DestinationTableName = tableName;
-                    AppContext.SetSwitch(TruncateDecimalSwitch, truncateScaledDecimal);
+                    appContextSwitchesHelper.TruncateScaledDecimalField = truncateScaledDecimal ? LocalAppContextSwitchesHelper.Tristate.True : LocalAppContextSwitchesHelper.Tristate.False;
                     bulkCopy.WriteToServer(table);
                 }
                 Assert.True(ValidateInsertedValues(connection, tableName, truncateScaledDecimal), $"Invalid test happened with connection string [{connection.ConnectionString}]");
@@ -635,6 +643,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ClassData(typeof(ConnectionStringsProvider))]
         public static void TestScaledDecimalTVP_CommandSP(string connectionString, bool truncateScaledDecimal)
         {
+            using LocalAppContextSwitchesHelper appContextSwitchesHelper = new();
+
             string tableName = DataTestUtility.GetUniqueNameForSqlServer("TestDecimalParameterBC");
             string tableTypeName = DataTestUtility.GetUniqueNameForSqlServer("UDTTTestDecimalParameterBC");
             string spName = DataTestUtility.GetUniqueNameForSqlServer("spTestDecimalParameterBC");
@@ -662,7 +672,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                         table.Rows.Add(newRow);
                     }
                     p.Value = table;
-                    AppContext.SetSwitch(TruncateDecimalSwitch, truncateScaledDecimal);
+                    appContextSwitchesHelper.TruncateScaledDecimalField = truncateScaledDecimal ? LocalAppContextSwitchesHelper.Tristate.True : LocalAppContextSwitchesHelper.Tristate.False;
                     cmd.ExecuteNonQuery();
                 }
                 // TVP always rounds data without attention to the configuration.
@@ -957,30 +967,19 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ConditionalFact(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup))]
         public static void ClosedConnection_SqlParameterValueTest()
         {
-            var threads = new List<Thread>();
-            for (int i = 0; i < 100; i++)
+            var tasks = new Task[100];
+            for (int i = 0; i < tasks.Length; i++)
             {
-                var t = new Thread(() =>
+                var t = Task.Factory.StartNew(() =>
                 {
                     for (int j = 0; j < 1000; j++)
                     {
-                        try
-                        {
-                            RunParameterTest();
-                        }
-                        catch (Exception e)
-                        {
-                            Assert.Fail($"Unexpected exception occurred: {e.Message}");
-                        }
+                        RunParameterTest();
                     }
-                });
-                t.Start();
-                threads.Add(t);
+                }, TaskCreationOptions.LongRunning);
+                tasks[i] = t;
             }
-            for (int i = 0; i < threads.Count; i++)
-            {
-                threads[i].Join();
-            }
+            Task.WaitAll(tasks);
         }
 
         private static void RunParameterTest()
@@ -998,7 +997,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             cm.Parameters.Add(new SqlParameter("@id2", SqlDbType.UniqueIdentifier) { Direction = ParameterDirection.Output });
             try
             {
-                System.Threading.Tasks.Task<int> task = cm.ExecuteNonQueryAsync(cancellationToken.Token);
+                Task<int> task = cm.ExecuteNonQueryAsync(cancellationToken.Token);
                 task.Wait();
             }
             catch (Exception)

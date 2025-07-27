@@ -9,15 +9,15 @@ using System.Diagnostics;
 using System.Threading;
 using System.Transactions;
 using Microsoft.Data.Common;
+using Microsoft.Data.Common.ConnectionString;
 using Microsoft.Data.ProviderBase;
 using Microsoft.Data.SqlClient.ConnectionPool;
-
 
 namespace Microsoft.Data.SqlClient
 {
     public sealed partial class SqlConnection : DbConnection
     {
-        private static readonly DbConnectionFactory s_connectionFactory = SqlConnectionFactory.SingletonInstance;
+        private static readonly SqlConnectionFactory s_connectionFactory = SqlConnectionFactory.Instance;
 
         private DbConnectionOptions _userConnectionOptions;
         private DbConnectionPoolGroup _poolGroup;
@@ -42,7 +42,7 @@ namespace Microsoft.Data.SqlClient
             }
         }
 
-        internal DbConnectionFactory ConnectionFactory
+        internal SqlConnectionFactory ConnectionFactory
         {
             get
             {
@@ -156,9 +156,7 @@ namespace Microsoft.Data.SqlClient
         {
             using (TryEventScope.Create("<prov.DbConnectionHelper.CreateDbCommand|API> {0}", ObjectID))
             {
-                DbCommand command = null;
-                DbProviderFactory providerFactory = ConnectionFactory.ProviderFactory;
-                command = providerFactory.CreateCommand();
+                DbCommand command = SqlClientFactory.Instance.CreateCommand();
                 command.Connection = this;
                 return command;
             }
