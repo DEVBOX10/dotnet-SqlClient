@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Data.Common;
+using Microsoft.Data.SqlClient.Internal;
 
 namespace Microsoft.Data.SqlClient
 {
@@ -60,7 +61,7 @@ namespace Microsoft.Data.SqlClient
             // When being deactivated, we check all the sessions in the
             // cache to make sure they're cleaned up and then we dispose of
             // sessions that are past what we want to keep around.
-            using (TryEventScope.Create("<sc.TdsParserSessionPool.Deactivate|ADV> {0} deactivating cachedCount={1}", ObjectID, _cachedCount))
+            using (SqlClientEventScope.Create("<sc.TdsParserSessionPool.Deactivate|ADV> {0} deactivating cachedCount={1}", ObjectID, _cachedCount))
             {
                 lock (_cache)
                 {
@@ -215,25 +216,6 @@ namespace Microsoft.Data.SqlClient
                         _cachedCount,
                         _cache.Count);
         }
-
-#if NETFRAMEWORK
-        // This is called from a ThreadAbort - ensure that it can be run from a CER Catch
-        internal void BestEffortCleanup()
-        {
-            for (int i = 0; i < _cache.Count; i++)
-            {
-                TdsParserStateObject session = _cache[i];
-                if (session != null)
-                {
-                    SNIHandle sessionHandle = session.Handle;
-                    if (sessionHandle != null)
-                    {
-                        sessionHandle.Dispose();
-                    }
-                }
-            }
-        }
-#endif
     }
 }
 

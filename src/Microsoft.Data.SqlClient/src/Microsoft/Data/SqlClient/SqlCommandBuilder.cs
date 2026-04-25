@@ -80,8 +80,8 @@ namespace Microsoft.Data.SqlClient
         /// <include file='../../../../../../doc/snippets/Microsoft.Data.SqlClient/SqlCommandBuilder.xml' path='docs/members[@name="SqlCommandBuilder"]/DataAdapter/*'/>
         [
         DefaultValue(null),
-        ResCategoryAttribute(StringsHelper.ResourceNames.DataCategory_Update),
-        ResDescriptionAttribute(StringsHelper.ResourceNames.SqlCommandBuilder_DataAdapter),
+        ResCategoryAttribute(nameof(Strings.DataCategory_Update)),
+        ResDescriptionAttribute(nameof(Strings.SqlCommandBuilder_DataAdapter)),
         ]
         public new SqlDataAdapter DataAdapter
         {
@@ -254,34 +254,9 @@ namespace Microsoft.Data.SqlClient
             {
                 throw ADP.ArgumentNull(nameof(command));
             }
-            TdsParser bestEffortCleanupTarget = null;
-#if NETFRAMEWORK
-            RuntimeHelpers.PrepareConstrainedRegions();
-#endif
-            try
-            {
-                bestEffortCleanupTarget = SqlInternalConnection.GetBestEffortCleanupTarget(command.Connection);
 
-                command.DeriveParameters();
-            }
-            catch (OutOfMemoryException e)
-            {
-                command?.Connection?.Abort(e);
-                throw;
-            }
-            catch (StackOverflowException e)
-            {
-                command?.Connection?.Abort(e);
-                throw;
-            }
-            catch (ThreadAbortException e)
-            {
-                command?.Connection?.Abort(e);
-#if NETFRAMEWORK
-                SqlInternalConnection.BestEffortCleanup(bestEffortCleanupTarget);
-#endif
-                throw;
-            }
+            // @TODO: CER Exception Handling was removed here (see GH#3581)
+            command.DeriveParameters();
         }
 
         /// <include file='../../../../../../doc/snippets/Microsoft.Data.SqlClient/SqlCommandBuilder.xml' path='docs/members[@name="SqlCommandBuilder"]/GetSchemaTable/*'/>

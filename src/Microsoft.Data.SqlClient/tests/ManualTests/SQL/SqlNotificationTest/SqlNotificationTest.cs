@@ -59,15 +59,19 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
             // just change something that doesn't impact the dependency dispatcher
             if (cb.ShouldSerialize("connect timeout"))
+            {
                 cb.ConnectTimeout = cb.ConnectTimeout + 1;
+            }
             else
+            {
                 cb.ConnectTimeout = 50;
+            }
 
             Assert.True(SqlDependency.Start(_startConnectionString), "Failed to start listener.");
 
             try
             {
-                DataTestUtility.AssertThrowsWrapper<InvalidOperationException>(() => SqlDependency.Start(cb.ToString()));
+                DataTestUtility.AssertThrows<InvalidOperationException>(() => SqlDependency.Start(cb.ToString()));
             }
             finally
             {
@@ -112,7 +116,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     Console.WriteLine("4 Notification callback. Type={0}, Info={1}, Source={2}", args.Type, args.Info, args.Source);
                 };
 
-                DataTestUtility.AssertThrowsWrapper<InvalidOperationException>(() => cmd.ExecuteReader());
+                DataTestUtility.AssertThrows<InvalidOperationException>(() => cmd.ExecuteReader());
             }
         }
 
@@ -134,7 +138,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     Console.WriteLine("5 Notification callback. Type={0}, Info={1}, Source={2}", args.Type, args.Info, args.Source);
                 };
 
-                DataTestUtility.AssertThrowsWrapper<InvalidOperationException>(() => cmd.ExecuteReader());
+                DataTestUtility.AssertThrows<InvalidOperationException>(() => cmd.ExecuteReader());
             }
         }
 

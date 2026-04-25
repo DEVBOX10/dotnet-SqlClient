@@ -318,7 +318,10 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 if (disposing && _cachedBytes != null)
+                {
                     _cachedBytes.Clear();
+                }
+
                 _cachedBytes = null;
                 _currentPosition = 0;
                 _currentArrayIndex = 0;
@@ -378,7 +381,9 @@ namespace Microsoft.Data.SqlClient
                 }
                 cb = _cachedBytes[_currentArrayIndex].Length - _currentPosition;
                 if (cb > count)
+                {
                     cb = count;
+                }
 
                 Buffer.BlockCopy(_cachedBytes[_currentArrayIndex], _currentPosition, buffer, offset, cb);
                 _currentPosition += cb;
@@ -447,7 +452,9 @@ namespace Microsoft.Data.SqlClient
                 }
             }
             if (pos > 0)
+            {
                 throw new ArgumentOutOfRangeException(argumentName);
+            }
         }
 
         private long TotalLength
@@ -470,6 +477,8 @@ namespace Microsoft.Data.SqlClient
 
     sealed internal class SqlStreamingXml
     {
+        private static readonly XmlWriterSettings s_writerSettings = new() { CloseOutput = true, ConformanceLevel = ConformanceLevel.Fragment };
+
         private readonly int _columnOrdinal;
         private SqlDataReader _reader;
         private XmlReader _xmlReader;
@@ -502,10 +511,7 @@ namespace Microsoft.Data.SqlClient
                 SqlStream sqlStream = new(_columnOrdinal, _reader, addByteOrderMark: true, processAllRows:false, advanceReader:false);
                 _xmlReader = sqlStream.ToXmlReader();
                 _strWriter = new StringWriter((System.IFormatProvider)null);
-                XmlWriterSettings writerSettings = new();
-                writerSettings.CloseOutput = true;      // close the memory stream when done
-                writerSettings.ConformanceLevel = ConformanceLevel.Fragment;
-                _xmlWriter = XmlWriter.Create(_strWriter, writerSettings);
+                _xmlWriter = XmlWriter.Create(_strWriter, s_writerSettings);
             }
 
             int charsToSkip = 0;
@@ -579,7 +585,9 @@ namespace Microsoft.Data.SqlClient
         private void WriteXmlElement()
         {
             if (_xmlReader.EOF)
+            {
                 return;
+            }
 
             bool canReadChunk = _xmlReader.CanReadValueChunk;
             char[] writeNodeBuffer = null;

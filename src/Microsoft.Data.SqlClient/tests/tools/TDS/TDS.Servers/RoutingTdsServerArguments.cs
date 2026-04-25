@@ -1,0 +1,44 @@
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
+namespace Microsoft.SqlServer.TDS.Servers
+{
+    /// <summary>
+    /// Arguments for routing TDS Server
+    /// </summary>
+    public class RoutingTdsServerArguments : TdsServerArguments
+    {
+        /// <summary>
+        /// Routing destination protocol.
+        /// </summary>
+        public int RoutingProtocol { get; set; } = 0;
+
+        /// <summary>
+        /// Routing TCP port
+        /// </summary>
+        public ushort RoutingTCPPort { get; set; } = 0;
+
+        /// <summary>
+        /// Routing TCP host name
+        /// </summary>
+        public string RoutingTCPHost { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Setting this to a non-empty value will cause the server to include an 
+        /// enhanced routing ENVCHANGE token in the Login Response message. 
+        /// An empty value will include a legacy routing ENVCHANGE token.
+        /// </summary>
+        public string RoutingDatabaseName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Packet on which routing should occur
+        /// </summary>
+        public TDSMessageType RouteOnPacket { get; set; } = TDSMessageType.TDS7Login;
+
+        /// <summary>
+        /// Indicates that routing should only occur on read-only connections
+        /// </summary>
+        public bool RequireReadOnly { get; set; } = true;
+    }
+}

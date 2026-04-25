@@ -13,7 +13,7 @@ namespace System
 {
     public static class AssertExtensions
     {
-        private static bool IsFullFramework => TestUtility.IsFullFramework;
+        private static bool IsFullFramework => TestUtility.IsNetFramework;
 
         public static void Throws<T>(Action action, string message)
             where T : Exception
@@ -36,8 +36,10 @@ namespace System
                 IsFullFramework ?
                 netFxParamName : netCoreParamName;
 
-            if (!TestUtility.NetNative)
+            if (!TestUtility.IsNetNative)
+            {
                 Assert.Equal(expectedParamName, exception.ParamName);
+            }
         }
 
         public static void Throws<T>(string netCoreParamName, string netFxParamName, Func<object> testCode)
@@ -55,8 +57,10 @@ namespace System
                 IsFullFramework ?
                 netFxParamName : netCoreParamName;
 
-            if (!TestUtility.NetNative)
+            if (!TestUtility.IsNetNative)
+            {
                 Assert.Equal(expectedParamName, exception.ParamName);
+            }
         }
 
         public static T Throws<T>(string paramName, Action action)
@@ -64,8 +68,10 @@ namespace System
         {
             T exception = Assert.Throws<T>(action);
 
-            if (!TestUtility.NetNative)
+            if (!TestUtility.IsNetNative)
+            {
                 Assert.Equal(paramName, exception.ParamName);
+            }
 
             return exception;
         }
@@ -83,8 +89,10 @@ namespace System
         {
             T exception = Assert.Throws<T>(testCode);
 
-            if (!TestUtility.NetNative)
+            if (!TestUtility.IsNetNative)
+            {
                 Assert.Equal(paramName, exception.ParamName);
+            }
 
             return exception;
         }
@@ -94,8 +102,10 @@ namespace System
         {
             T exception = await Assert.ThrowsAsync<T>(testCode);
 
-            if (!TestUtility.NetNative)
+            if (!TestUtility.IsNetNative)
+            {
                 Assert.Equal(paramName, exception.ParamName);
+            }
 
             return exception;
         }
@@ -155,7 +165,9 @@ namespace System
             {
                 Type exceptionType = e.GetType();
                 if (exceptionTypes.Any(t => t.Equals(exceptionType)))
+                {
                     return;
+                }
 
                 throw new XunitException($"Expected one of: ({string.Join<Type>(", ", exceptionTypes)}) -> Actual: ({e.GetType()})");
             }
@@ -194,9 +206,13 @@ namespace System
         private static string AddOptionalUserMessage(string message, string userMessage)
         {
             if (userMessage == null)
+            {
                 return message;
+            }
             else
+            {
                 return $"{message} {userMessage}";
+            }
         }
 
         /// <summary>
@@ -225,13 +241,17 @@ namespace System
         public static void GreaterThan<T>(T actual, T greaterThan, string userMessage = null) where T : IComparable
         {
             if (actual == null)
+            {
                 throw new XunitException(
                     greaterThan == null
                         ? AddOptionalUserMessage($"Expected: <null> to be greater than <null>.", userMessage)
                         : AddOptionalUserMessage($"Expected: <null> to be greater than {greaterThan}.", userMessage));
+            }
 
             if (actual.CompareTo(greaterThan) <= 0)
+            {
                 throw new XunitException(AddOptionalUserMessage($"Expected: {actual} to be greater than {greaterThan}", userMessage));
+            }
         }
 
         /// <summary>
@@ -255,7 +275,9 @@ namespace System
             }
 
             if (actual.CompareTo(lessThan) >= 0)
+            {
                 throw new XunitException(AddOptionalUserMessage($"Expected: {actual} to be less than {lessThan}", userMessage));
+            }
         }
 
         /// <summary>
@@ -267,10 +289,14 @@ namespace System
         {
             // null, by definition is always less than or equal to
             if (actual == null)
+            {
                 return;
+            }
 
             if (actual.CompareTo(lessThanOrEqualTo) > 0)
+            {
                 throw new XunitException(AddOptionalUserMessage($"Expected: {actual} to be less than or equal to {lessThanOrEqualTo}", userMessage));
+            }
         }
 
         /// <summary>
@@ -296,7 +322,9 @@ namespace System
             }
 
             if (actual.CompareTo(greaterThanOrEqualTo) < 0)
+            {
                 throw new XunitException(AddOptionalUserMessage($"Expected: {actual} to be greater than or equal to {greaterThanOrEqualTo}", userMessage));
+            }
         }
 
     }

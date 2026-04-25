@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using Microsoft.Data.SqlClient.Internal;
 
 namespace Microsoft.Data.SqlClient
 {
@@ -39,7 +40,10 @@ namespace Microsoft.Data.SqlClient
         public bool LogAssert(bool value, string type, string method, string message)
         {
             if (!value)
+            {
                 LogError(type, method, message);
+            }
+
             return value;
         }
 

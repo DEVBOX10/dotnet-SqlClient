@@ -16,6 +16,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using Microsoft.Data.Common;
 using Microsoft.Data.ProviderBase;
+using Microsoft.Data.SqlClient.Internal;
 
 namespace Microsoft.Data.SqlClient.ManagedSni
 {
@@ -98,13 +99,13 @@ namespace Microsoft.Data.SqlClient.ManagedSni
             }
         }
 
-        public override int ProtocolVersion
+        public override SslProtocols ProtocolVersion
         {
             get
             {
                 try
                 {
-                    return (int)_sslStream.SslProtocol;
+                    return _sslStream.SslProtocol;
                 }
                 catch
                 {
@@ -138,7 +139,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
             string hostNameInCertificate,
             string serverCertificateFilename)
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 SqlClientEventSource.Log.TrySNITraceEvent(nameof(SniTcpHandle), EventType.INFO, "Connection Id {0}, Setting server name = {1}", args0: _connectionId, args1: serverName);
 
@@ -220,8 +221,10 @@ namespace Microsoft.Data.SqlClient.ManagedSni
                                     {
                                         throw;
                                     }
-                                    if (exRetry is SocketException || exRetry is ArgumentNullException
-                                        || exRetry is ArgumentException || exRetry is ArgumentOutOfRangeException || exRetry is AggregateException)
+                                    if (exRetry is
+                                        SocketException or
+                                        ArgumentException or
+                                        AggregateException)
                                     {
                                         SqlClientEventSource.Log.TrySNITraceEvent(nameof(SniTcpHandle), EventType.INFO, "Connection Id {0}, Retrying exception {1}", args0: _connectionId, args1: exRetry?.Message);
                                         if (parallel)
@@ -299,7 +302,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
         // Only write to the DNS cache when we receive IsSupported flag as true in the Feature Ext Ack from server.
         private Socket TryConnectParallel(string hostName, int port, TimeoutTimer timeout, ref bool callerReportError, string cachedFQDN, ref SQLDNSInfo pendingDNSInfo)
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 Socket availableSocket = null;
                 bool isInfiniteTimeOut = timeout.IsInfinite;
@@ -368,7 +371,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
         // Only write to the DNS cache when we receive IsSupported flag as true in the Feature Ext Ack from server.
         private static Socket Connect(string serverName, int port, TimeoutTimer timeout, SqlConnectionIPAddressPreference ipPreference, string cachedFQDN, ref SQLDNSInfo pendingDNSInfo)
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 SqlClientEventSource.Log.TrySNITraceEvent(nameof(SniTcpHandle), EventType.INFO, "IP preference : {0}", Enum.GetName(typeof(SqlConnectionIPAddressPreference), ipPreference));
                 bool isInfiniteTimeout = timeout.IsInfinite;
@@ -496,7 +499,9 @@ namespace Microsoft.Data.SqlClient.ManagedSni
                     finally
                     {
                         if (!isSocketSelected)
+                        {
                             socket?.Dispose();
+                        }
                     }
                 }
 
@@ -514,7 +519,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
 
         private static Socket ParallelConnect(IPAddress[] serverAddresses, int port, TimeoutTimer timeout, string cachedFQDN, ref SQLDNSInfo pendingDNSInfo)
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 if (serverAddresses == null)
                 {
@@ -724,7 +729,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
         /// </summary>
         public override uint EnableSsl(uint options)
         {
-            using (TrySNIEventScope.Create(nameof(SniHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniHandle)))
             {
                 _validateCert = (options & TdsEnums.SNI_SSL_VALIDATE_CERTIFICATE) != 0;
 
@@ -765,7 +770,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
         /// </summary>
         public override void DisableSsl()
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 _sslStream.Dispose();
                 _sslStream = null;
@@ -953,9 +958,30 @@ namespace Microsoft.Data.SqlClient.ManagedSni
                 }
                 finally
                 {
-                    // Reset the socket timeout to Timeout.Infinite after the receive operation is done
-                    // to avoid blocking the thread in case of a timeout error.
-                    _socket.ReceiveTimeout = Timeout.Infinite;
+                    const int resetTimeout = Timeout.Infinite;
+
+                    try
+                    {
+                        // Reset the socket timeout to Timeout.Infinite after
+                        // the receive operation is done to avoid blocking the
+                        // thread in case of a timeout error.
+                        _socket.ReceiveTimeout = resetTimeout;
+
+                    }
+                    catch (SocketException ex)
+                    {
+                        // We sometimes see setting the ReceiveTimeout fail
+                        // on macOS. There's isn't much we can do about it
+                        // though, so just log and move on.
+                        SqlClientEventSource.Log.TrySNITraceEvent(
+                            nameof(SniTcpHandle),
+                            EventType.ERR,
+                            "Connection Id {0}, Failed to reset socket " +
+                            "receive timeout to {1}: {2}",
+                            _connectionId,
+                            resetTimeout,
+                            ex.Message);
+                    }
                 }
             }
         }
@@ -978,7 +1004,7 @@ namespace Microsoft.Data.SqlClient.ManagedSni
         /// <returns>SNI error code</returns>
         public override uint SendAsync(SniPacket packet)
         {
-            using (TrySNIEventScope.Create(nameof(SniTcpHandle)))
+            using (SqlClientSNIEventScope.Create(nameof(SniTcpHandle)))
             {
                 packet.WriteToStreamAsync(_stream, _sendCallback, SniProviders.TCP_PROV);
                 SqlClientEventSource.Log.TrySNITraceEvent(nameof(SniTcpHandle), EventType.INFO, "Connection Id {0}, Data sent to stream asynchronously", args0: _connectionId);

@@ -36,5 +36,5 @@
     "UserManagedIdentityClientId": "",
     "PowerShellPath": "",
     "AliasName": "",
-    "IsJsonSupported": false
+    "WorkloadIdentityFederationServiceConnectionId": ""
 }

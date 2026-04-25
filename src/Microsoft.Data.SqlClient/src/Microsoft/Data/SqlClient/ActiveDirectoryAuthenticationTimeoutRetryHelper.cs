@@ -51,19 +51,19 @@ namespace Microsoft.Data.SqlClient
                         if (value != ActiveDirectoryAuthenticationTimeoutRetryState.Retrying
                             && value != ActiveDirectoryAuthenticationTimeoutRetryState.HasLoggedIn)
                         {
-                            throw new InvalidOperationException($"Cannot transit from {_state} to {value}.");
+                            throw new InvalidOperationException(StringsHelper.GetString(Strings.SQL_ActiveDirectoryInvalidStateTransition, _state, value));
                         }
                         break;
                     case ActiveDirectoryAuthenticationTimeoutRetryState.Retrying:
                         if (value != ActiveDirectoryAuthenticationTimeoutRetryState.HasLoggedIn)
                         {
-                            throw new InvalidOperationException($"Cannot transit from {_state} to {value}.");
+                            throw new InvalidOperationException(StringsHelper.GetString(Strings.SQL_ActiveDirectoryInvalidStateTransition, _state, value));
                         }
                         break;
                     case ActiveDirectoryAuthenticationTimeoutRetryState.HasLoggedIn:
-                        throw new InvalidOperationException($"Cannot transit from {_state} to {value}.");
+                        throw new InvalidOperationException(StringsHelper.GetString(Strings.SQL_ActiveDirectoryInvalidStateTransition, _state, value));
                     default:
-                        throw new InvalidOperationException($"Unsupported state: {value}.");
+                        throw new InvalidOperationException(StringsHelper.GetString(Strings.SQL_ActiveDirectoryUnsupportedState, value));
                 }
                 if (_sqlAuthLogger.IsLoggingEnabled)
                 {
@@ -116,7 +116,10 @@ namespace Microsoft.Data.SqlClient
         {
             var innerException = sqlex.InnerException as Win32Exception;
             if (innerException == null)
+            {
                 return false;
+            }
+
             return innerException.NativeErrorCode == 10054 // Server timeout
                    || innerException.NativeErrorCode == 258; // Client timeout
         }
@@ -124,10 +127,13 @@ namespace Microsoft.Data.SqlClient
         private static string GetTokenHash(SqlFedAuthToken token)
         {
             if (token == null)
+            {
                 return "null";
+            }
 
             // Here we mimic how ADAL calculates hash for token. They use UTF8 instead of Unicode.
-            var originalTokenString = SqlAuthenticationToken.AccessTokenStringFromBytes(token.accessToken);
+            var originalTokenString = Encoding.Unicode.GetString(token.AccessToken);
+
             var bytesInUtf8 = Encoding.UTF8.GetBytes(originalTokenString);
             using (var sha256 = SHA256.Create())
             {

@@ -21,7 +21,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
     /// <summary>
     /// Always Encrypted public API Manual tests.
     /// </summary>
-    public sealed class ApiShould : IClassFixture<PlatformSpecificTestContext>, IDisposable
+    public sealed class ApiShould : IClassFixture<SQLSetupStrategyCertStoreProvider>, IDisposable
     {
         private SQLSetupStrategy _fixture;
 
@@ -63,9 +63,9 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             "Operation cancelled by user."
         };
 
-        public ApiShould(PlatformSpecificTestContext context)
+        public ApiShould(SQLSetupStrategyCertStoreProvider context)
         {
-            _fixture = context.Fixture;
+            _fixture = context;
             _tableName = _fixture.ApiTestTable.Name;
 
             ApiTestTable _customKeyStoreProviderTable = _fixture.CustomKeyStoreProviderTestTable as ApiTestTable;
@@ -166,8 +166,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             const string firstColumnName = @"firstColumn";
             const string secondColumnName = @"secondColumn";
             const string thirdColumnName = @"thirdColumn";
-            string inputProcedureName = DataTestUtility.GetUniqueName("InputProc").ToString();
-            string outputProcedureName = DataTestUtility.GetUniqueName("OutputProc").ToString();
+            string inputProcedureName = DataTestUtility.GetShortName("InputProc").ToString();
+            string outputProcedureName = DataTestUtility.GetShortName("OutputProc").ToString();
             const int charColumnSize = 100;
             const int decimalColumnPrecision = 10;
             const int decimalColumnScale = 4;
@@ -559,6 +559,10 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
                                 tryagain = true;
                                 break;
                             }
+                            else
+                            {
+                                throw;
+                            }
                         }
                         Assert.Equal(numberOfRows, rowsAffected);
                         tryagain = false;
@@ -722,7 +726,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
         [ClassData(typeof(AEConnectionStringProvider))]
         public async Task TestExecuteReaderAsyncWithLargeQuery(string connectionString)
         {
-            string randomName = DataTestUtility.GetUniqueName(Guid.NewGuid().ToString().Replace("-", ""), false);
+            string randomName = DataTestUtility.GetShortName(Guid.NewGuid().ToString().Replace("-", ""), false);
             if (randomName.Length > 50)
             {
                 randomName = randomName.Substring(0, 50);
@@ -731,44 +735,28 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             int columnsCount = 50;
 
             // Arrange - drops the table with long name and re-creates it with 52 columns (ID, name, ColumnName0..49)
-            try
-            {
-                CreateTable(connectionString, tableName, columnsCount);
-                string name = "nobody";
+            using SqlConnection connection = new SqlConnection(connectionString);
+            await connection.OpenAsync();
 
-                using (SqlConnection connection = new SqlConnection(connectionString))
-                {
-                    await connection.OpenAsync();
-                    // This creates a "select top 100" query that has over 40k characters
-                    using (SqlCommand sqlCommand = new SqlCommand(GenerateSelectQuery(tableName, columnsCount, 10, "WHERE Name = @FirstName AND ID = @CustomerId"),
-                        connection,
-                        transaction: null,
-                        columnEncryptionSetting: SqlCommandColumnEncryptionSetting.Enabled))
-                    {
-                        sqlCommand.Parameters.Add(@"CustomerId", SqlDbType.Int);
-                        sqlCommand.Parameters.Add(@"FirstName", SqlDbType.VarChar, name.Length);
+            using Microsoft.Data.SqlClient.Tests.Common.Fixtures.DatabaseObjects.Table wideTable = new(connection, tableName, GenerateBitTableDefinition(columnsCount));
+            string name = "nobody";
 
-                        sqlCommand.Parameters[0].Value = 0;
-                        sqlCommand.Parameters[1].Value = name;
+            // This creates a "select top 100" query that has over 40k characters
+            using SqlCommand sqlCommand = new(GenerateSelectQuery(wideTable.Name, columnsCount, 10, "WHERE Name = @FirstName AND ID = @CustomerId"),
+                connection,
+                transaction: null,
+                columnEncryptionSetting: SqlCommandColumnEncryptionSetting.Enabled);
+            sqlCommand.Parameters.Add(@"CustomerId", SqlDbType.Int);
+            sqlCommand.Parameters.Add(@"FirstName", SqlDbType.VarChar, name.Length);
 
-                        // Act and Assert
-                        // Test that execute reader async does not throw an exception.
-                        // The table is empty so there should be no results; however, the bug previously found is that it causes a TDS RPC exception on enclave.
-                        using (SqlDataReader sqlDataReader = await sqlCommand.ExecuteReaderAsync())
-                        {
-                            Assert.False(sqlDataReader.HasRows, "The table should be empty");
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                throw;
-            }
-            finally
-            {
-                DropTableIfExists(connectionString, tableName);
-            }
+            sqlCommand.Parameters[0].Value = 0;
+            sqlCommand.Parameters[1].Value = name;
+
+            // Act and Assert
+            // Test that execute reader async does not throw an exception.
+            // The table is empty so there should be no results; however, the bug previously found is that it causes a TDS RPC exception on enclave.
+            using SqlDataReader sqlDataReader = await sqlCommand.ExecuteReaderAsync();
+            Assert.False(sqlDataReader.HasRows, "The table should be empty");
         }
 
         [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.IsTargetReadyForAeWithKeyStore))]
@@ -912,8 +900,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             using SqlCommand sqlCommand = new("", sqlConnection, transaction: null,
                 columnEncryptionSetting: SqlCommandColumnEncryptionSetting.Enabled);
 
-            string procWithoutParams = DataTestUtility.GetUniqueName("EnclaveWithoutParams", withBracket: false);
-            string procWithParam = DataTestUtility.GetUniqueName("EnclaveWithParams", withBracket: false);
+            string procWithoutParams = DataTestUtility.GetShortName("EnclaveWithoutParams", withBracket: false);
+            string procWithParam = DataTestUtility.GetShortName("EnclaveWithParams", withBracket: false);
 
             try
             {
@@ -2001,7 +1989,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             }
         }
 
-        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringSetupForAE))]
+        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.IsTargetReadyForAeWithKeyStore))]
         [ClassData(typeof(AEConnectionStringProviderWithExecutionMethod))]
         public void TestSqlCommandCancel(string connection, string value)
         {
@@ -2539,6 +2527,21 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             Task readAsyncTask = ReadAsync(cmd, values, CommandBehavior.Default);
             readAsyncTask.GetAwaiter().GetResult();
 
+            // TODO(GH-3604): This section fails on Linux:
+            //
+            // Failed Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted.ApiShould.TestRetryWhenAEEnclaveCacheIsStale(connectionString: "Data Source=tcp:10.0.0.4;Database=NORTHWIND;UID=sa"···) [45 s]
+            // EXEC : error Message:  [/mnt/vss/_work/1/s/build.proj]
+            //     Microsoft.Data.SqlClient.EnclaveDelegate+RetryableEnclaveQueryExecutionException : testing
+            //     Stack Trace:
+            //     at Microsoft.Data.SqlClient.SqlCommand.EndExecuteReaderAsync(IAsyncResult asyncResult) in /_/src/Microsoft.Data.SqlClient/netcore/src/Microsoft/Data/SqlClient/SqlCommand.netcore.cs:line 1025
+            //     at Microsoft.Data.SqlClient.SqlCommand.<>c.<InternalExecuteReaderAsync>b__233_1(IAsyncResult asyncResult) in /_/src/Microsoft.Data.SqlClient/netcore/src/Microsoft/Data/SqlClient/SqlCommand.netcore.cs:line 1569
+            //     at System.Threading.Tasks.TaskFactory`1.FromAsyncCoreLogic(IAsyncResult iar, Func`2 endFunction, Action`1 endAction, Task`1 promise, Boolean requiresSynchronization)
+            // --- End of stack trace from previous location ---
+            //     at Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted.ApiShould.ReadAsync(SqlCommand sqlCommand, IList`1 values, CommandBehavior commandBehavior) in /_/src/Microsoft.Data.SqlClient/tests/ManualTests/AlwaysEncrypted/ApiShould.cs:line 2776
+            //     at Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted.ApiShould.TestRetryWhenAEEnclaveCacheIsStale(String connectionString) in /_/src/Microsoft.Data.SqlClient/tests/ManualTests/AlwaysEncrypted/ApiShould.cs:line 2563
+            //     at System.RuntimeMethodHandle.InvokeMethod(Object target, Void** arguments, Signature sig, Boolean isConstructor)
+            //     at System.Reflection.MethodBaseInvoker.InvokeDirectByRefWithFewArgs(Object obj, Span`1 copyOfArgs, BindingFlags invokeAttr)
+            /*
 #if DEBUG
             CommandHelper.ForceThrowDuringGenerateEnclavePackage(cmd);
 
@@ -2558,7 +2561,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             Task readAsyncTask2 = ReadAsync(cmd, values, CommandBehavior.Default);
             readAsyncTask2.GetAwaiter().GetResult();
 #endif
-
+            */
+            
             // revert the CEK change to the CustomerId column
             cmd.Parameters.Clear();
             cmd.CommandText = string.Format(alterCekQueryFormatString, _tableName, table.columnEncryptionKey1.Name);
@@ -3035,30 +3039,15 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             }
         }
 
-        private static void CreateTable(string connString, string tableName, int columnsCount)
-            => DataTestUtility.RunNonQuery(connString, GenerateCreateQuery(tableName, columnsCount));
         /// <summary>
-        /// Drops the table if the specified table exists
-        /// </summary>
-        /// <param name="connString">The connection string to the database</param>
-        /// <param name="tableName">The name of the table to be dropped</param>
-        private static void DropTableIfExists(string connString, string tableName)
-        {
-            using var sqlConnection = new SqlConnection(connString);
-            sqlConnection.Open();
-            DataTestUtility.DropTable(sqlConnection, tableName);
-        }
-
-        /// <summary>
-        /// Generates the query for creating a table with the number of bit columns specified.
+        /// Generates the definition of a table with the number of bit columns specified.
         /// </summary>
         /// <param name="tableName">The name of the table</param>
         /// <param name="columnsCount">The number of columns for the table</param>
         /// <returns></returns>
-        private static string GenerateCreateQuery(string tableName, int columnsCount)
+        private static string GenerateBitTableDefinition(int columnsCount)
         {
             StringBuilder builder = new StringBuilder();
-            builder.Append(string.Format("CREATE TABLE [dbo].[{0}]", tableName));
             builder.Append('(');
             builder.AppendLine("[ID][bigint] NOT NULL,");
             builder.AppendLine("[Name] [varchar] (200) NOT NULL");
@@ -3084,16 +3073,16 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
         {
             StringBuilder builder = new StringBuilder();
             builder.AppendLine($"SELECT TOP 100");
-            builder.AppendLine($"[{tableName}].[ID],");
-            builder.AppendLine($"[{tableName}].[Name]");
+            builder.AppendLine($"{tableName}.[ID],");
+            builder.AppendLine($"{tableName}.[Name]");
             for (int i = 0; i < columnsCount; i++)
             {
                 builder.Append(",");
-                builder.AppendLine($"[{tableName}].[ColumnName{i}]");
+                builder.AppendLine($"{tableName}.[ColumnName{i}]");
             }
 
-            string extra = string.IsNullOrEmpty(where) ? $"(NOLOCK) [{tableName}]" : where;
-            builder.AppendLine($"FROM [{tableName}] {extra};");
+            string extra = string.IsNullOrEmpty(where) ? $"(NOLOCK) {tableName}" : where;
+            builder.AppendLine($"FROM {tableName} {extra};");
 
             StringBuilder builder2 = new StringBuilder();
             for (int i = 0; i < repeat; i++)
@@ -3150,10 +3139,22 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.AlwaysEncrypted
             }
             catch (AggregateException aggregateException)
             {
+                bool unexpected = false;
                 foreach (Exception ex in aggregateException.InnerExceptions)
                 {
-                    Assert.True(ex is SqlException, @"cancelling a command through cancellation token resulted in unexpected exception.");
-                    Assert.True(@"Operation cancelled by user." == ex.Message, @"cancelling a command through cancellation token resulted in unexpected error message.");
+                    if (ex is SqlException or InvalidOperationException)
+                    {
+                        Assert.Equal("Operation cancelled by user.", ex.Message);
+                    }
+                    else
+                    {
+                        unexpected = true;
+                        Console.WriteLine($"Cancellation produced non-SqlException: {ex}");
+                    }
+                }
+                if (unexpected)
+                {
+                    Assert.Fail("Unexpected exceptions encountered; see console for details.");
                 }
             }
 

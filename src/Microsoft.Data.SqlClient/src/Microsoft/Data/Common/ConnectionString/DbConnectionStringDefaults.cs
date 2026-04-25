@@ -39,7 +39,7 @@ namespace Microsoft.Data.Common.ConnectionString
         internal const int MaxPoolSize = 100;
         internal const int MinPoolSize = 0;
         internal const bool MultipleActiveResultSets = false;
-        internal const bool MultiSubnetFailover = false;
+        internal static bool MultiSubnetFailover => LocalAppContextSwitches.EnableMultiSubnetFailoverByDefault;
         internal const int PacketSize = 8000;
         internal const string Password = "";
         internal const bool PersistSecurityInfo = false;
@@ -57,7 +57,7 @@ namespace Microsoft.Data.Common.ConnectionString
         
         #if NETFRAMEWORK
         internal const bool ConnectionReset = true;
-        internal static readonly bool TransparentNetworkIpResolution = !LocalAppContextSwitches.DisableTnirByDefault;
+        internal static bool TransparentNetworkIpResolution => !LocalAppContextSwitches.DisableTnirByDefault;
         internal const string NetworkLibrary = "";
         #endif
     }

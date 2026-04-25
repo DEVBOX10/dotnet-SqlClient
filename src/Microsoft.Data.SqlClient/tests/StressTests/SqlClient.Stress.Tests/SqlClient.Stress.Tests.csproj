@@ -1,0 +1,13 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Stress.Data.SqlClient</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(RepoRoot)/src/Microsoft.Data.SqlClient/src/Microsoft.Data.SqlClient.csproj" />
+
+    <ProjectReference Include="$(StressRoot)/SqlClient.Stress.Framework/SqlClient.Stress.Framework.csproj" />
+  </ItemGroup>
+
+</Project>

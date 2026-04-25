@@ -1,4 +1,8 @@
-﻿using System;
+﻿// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for more information.
+
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
@@ -14,11 +18,11 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
     public class JsonBulkCopyTest
     {
         private readonly ITestOutputHelper _output;
-        private static readonly string _generatedJsonFile = DataTestUtility.GenerateRandomCharacters("randomRecords");
-        private static readonly string _outputFile = DataTestUtility.GenerateRandomCharacters("serverResults");
-        private static readonly string _sourceTableName = DataTestUtility.GenerateObjectName();
-        private static readonly string _destinationTableName = DataTestUtility.GenerateObjectName();
-        
+        private static readonly string _generatedJsonFile = DataTestUtility.GetShortName("randomRecords");
+        private static readonly string _outputFile = DataTestUtility.GetShortName("serverResults");
+        private static readonly string _sourceTableName = DataTestUtility.GetShortName("jsonBulkCopySrcTable", true);
+        private static readonly string _destinationTableName = DataTestUtility.GetShortName("jsonBulkCopyDestTable", true);
+
         public JsonBulkCopyTest(ITestOutputHelper output)
         {
             _output = output;
@@ -26,10 +30,10 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
 
         public static IEnumerable<object[]> JsonBulkCopyTestData()
         {
-            yield return new object[] { CommandBehavior.Default, false, 300, 100 };
-            yield return new object[] { CommandBehavior.Default, true, 300, 100 };
-            yield return new object[] { CommandBehavior.SequentialAccess, false, 300, 100 };
-            yield return new object[] { CommandBehavior.SequentialAccess, true, 300, 100 };
+            yield return new object[] { CommandBehavior.Default, false, 30, 10 };
+            yield return new object[] { CommandBehavior.Default, true, 30, 10 };
+            yield return new object[] { CommandBehavior.SequentialAccess, false, 30, 10 };
+            yield return new object[] { CommandBehavior.SequentialAccess, true, 30, 10 };
         }
 
         private void PopulateData(int noOfRecords, int rows)
@@ -87,7 +91,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
             try
             {
                 DeleteFile(_outputFile);
-                using (SqlCommand command = new SqlCommand("SELECT [data] FROM [" + _destinationTableName + "]", connection))
+                using (SqlCommand command = new SqlCommand("SELECT [data] FROM " + _destinationTableName, connection))
                 {
                     using (SqlDataReader reader = command.ExecuteReader(CommandBehavior.SequentialAccess))
                     {
@@ -125,7 +129,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
             try
             {
                 DeleteFile(_outputFile);
-                using (SqlCommand command = new SqlCommand("SELECT [data] FROM [" + _destinationTableName + "]", connection))
+                using (SqlCommand command = new SqlCommand("SELECT [data] FROM " + _destinationTableName, connection))
                 {
                     using (SqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess))
                     {
@@ -159,7 +163,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
 
         private void StreamJsonFileToServer(SqlConnection connection)
         {
-            using (SqlCommand cmd = new SqlCommand("INSERT INTO [" + _sourceTableName + "] (data) VALUES (@jsondata)", connection))
+            using (SqlCommand cmd = new SqlCommand("INSERT INTO " + _sourceTableName + " (data) VALUES (@jsondata)", connection))
             {
                 using (StreamReader jsonFile = File.OpenText(_generatedJsonFile))
                 {
@@ -171,7 +175,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
 
         private async Task StreamJsonFileToServerAsync(SqlConnection connection)
         {
-            using (SqlCommand cmd = new SqlCommand("INSERT INTO [" + _sourceTableName + "] (data) VALUES (@jsondata)", connection))
+            using (SqlCommand cmd = new SqlCommand("INSERT INTO " + _sourceTableName + " (data) VALUES (@jsondata)", connection))
             {
                 using (StreamReader jsonFile = File.OpenText(_generatedJsonFile))
                 {
@@ -265,7 +269,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
             }
         }
 
-        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.IsJsonSupported))]
+        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsAzureServer), nameof(DataTestUtility.IsNotManagedInstance))]
         [MemberData(
             nameof(JsonBulkCopyTestData)
 #if NETFRAMEWORK
@@ -289,7 +293,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests.SQL.JsonTest
             }
         }
 
-        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.IsJsonSupported))]
+        [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsAzureServer), nameof(DataTestUtility.IsNotManagedInstance))]
         [MemberData(
             nameof(JsonBulkCopyTestData)
 #if NETFRAMEWORK

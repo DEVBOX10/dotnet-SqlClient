@@ -11,7 +11,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 
 #if NETFRAMEWORK
-using System.Runtime.Versioning;
 using System.Security;
 #endif
 
@@ -165,16 +164,24 @@ namespace Microsoft.Data.Common.ConnectionString
         internal static bool ConvertValueToBooleanInternal(string keyName, string stringValue)
         {
             if (CompareInsensitiveInvariant(stringValue, "true") || CompareInsensitiveInvariant(stringValue, "yes"))
+            {
                 return true;
+            }
             else if (CompareInsensitiveInvariant(stringValue, "false") || CompareInsensitiveInvariant(stringValue, "no"))
+            {
                 return false;
+            }
             else
             {
                 string tmp = stringValue.Trim();  // Remove leading & trailing whitespace.
                 if (CompareInsensitiveInvariant(tmp, "true") || CompareInsensitiveInvariant(tmp, "yes"))
+                {
                     return true;
+                }
                 else if (CompareInsensitiveInvariant(tmp, "false") || CompareInsensitiveInvariant(tmp, "no"))
+                {
                     return false;
+                }
                 else
                 {
                     throw ADP.InvalidConnectionOptionValue(keyName);
@@ -583,10 +590,6 @@ namespace Microsoft.Data.Common.ConnectionString
         // * this method queries "DataDirectory" value from the current AppDomain.
         //   This string is used for to replace "!DataDirectory!" values in the connection string, it is not considered as an "exposed resource".
         // * This method uses GetFullPath to validate that root path is valid, the result is not exposed out.
-        #if NETFRAMEWORK
-        [ResourceExposure(ResourceScope.None)]
-        [ResourceConsumption(ResourceScope.Machine, ResourceScope.Machine)]
-        #endif
         internal static string ExpandDataDirectory(string keyword, string value)
         {
             string fullPath = null;

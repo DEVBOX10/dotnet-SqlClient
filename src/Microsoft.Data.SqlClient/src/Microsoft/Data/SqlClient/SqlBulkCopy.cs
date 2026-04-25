@@ -15,6 +15,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using Microsoft.Data.Common;
+using Microsoft.Data.SqlClient.Connection;
+using Microsoft.Data.SqlClient.Internal;
 
 namespace Microsoft.Data.SqlClient
 {
@@ -203,10 +205,10 @@ namespace Microsoft.Data.SqlClient
                 switch (_rowSourceType)
                 {
                     case ValueSourceType.RowArray:
-                        rowNo = ((DataTable)_dataTableSource).Rows.IndexOf(_rowEnumerator.Current as DataRow);
+                        rowNo = ((DataTable)_dataTableSource).Rows.IndexOf((DataRow)_rowEnumerator.Current);
                         break;
                     case ValueSourceType.DataTable:
-                        rowNo = ((DataTable)_rowSource).Rows.IndexOf(_rowEnumerator.Current as DataRow);
+                        rowNo = ((DataTable)_rowSource).Rows.IndexOf((DataRow)_rowEnumerator.Current);
                         break;
                     case ValueSourceType.DbDataReader:
                     case ValueSourceType.IDataReader:
@@ -230,9 +232,16 @@ namespace Microsoft.Data.SqlClient
         private bool _hasMoreRowToCopy = false;
         private bool _isAsyncBulkCopy = false;
         private bool _isBulkCopyingInProgress = false;
-        private SqlInternalConnectionTds.SyncAsyncLock _parserLock = null;
+        private SqlConnectionInternal.SyncAsyncLock _parserLock = null;
 
         private SourceColumnMetadata[] _currentRowMetadata;
+
+        // Metadata caching fields for CacheMetadata option
+        internal BulkCopySimpleResultSet CachedMetadata { get; private set; }
+        // Per-operation clone of the destination table metadata, used when CacheMetadata is
+        // enabled so that column-pruning in AnalyzeTargetAndCreateUpdateBulkCommand does not
+        // mutate the cached BulkCopySimpleResultSet.
+        private _SqlMetaDataSet _operationMetaData;
 
 #if DEBUG
         internal static bool s_setAlwaysTaskOnWrite; //when set and in DEBUG mode, TdsParser::WriteBulkCopyValue will always return a task
@@ -352,6 +361,12 @@ namespace Microsoft.Data.SqlClient
                 {
                     throw ADP.ArgumentOutOfRange(nameof(DestinationTableName));
                 }
+                else if (string.Equals(_destinationTableName, value, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                CachedMetadata = null;
                 _destinationTableName = value;
             }
         }
@@ -410,7 +425,7 @@ namespace Microsoft.Data.SqlClient
             string[] parts;
             try
             {
-                parts = MultipartIdentifier.ParseMultipartIdentifier(DestinationTableName, "[\"", "]\"", Strings.SQL_BulkCopyDestinationTableName, true);
+                parts = MultipartIdentifier.ParseMultipartIdentifier(DestinationTableName, Strings.SQL_BulkCopyDestinationTableName, true);
             }
             catch (Exception e)
             {
@@ -420,9 +435,6 @@ namespace Microsoft.Data.SqlClient
             {
                 throw SQL.BulkLoadInvalidDestinationTable(DestinationTableName, null);
             }
-            string TDSCommand;
-
-            TDSCommand = "select @@trancount; SET FMTONLY ON select * from " + ADP.BuildMultiPartName(parts) + " SET FMTONLY OFF ";
 
             string TableCollationsStoredProc;
             if (_connection.Is2008OrNewer)
@@ -456,27 +468,90 @@ namespace Microsoft.Data.SqlClient
             string CatalogName = parts[MultipartIdentifier.CatalogIndex];
             if (isTempTable && string.IsNullOrEmpty(CatalogName))
             {
-                TDSCommand += string.Format("exec tempdb..{0} N'{1}.{2}'",
-                    TableCollationsStoredProc,
-                    SchemaName,
-                    TableName
-                );
+                CatalogName = "tempdb";
             }
-            else
+            else if (!string.IsNullOrEmpty(CatalogName))
             {
-                // Escape the catalog name
-                if (!string.IsNullOrEmpty(CatalogName))
-                {
-                    CatalogName = SqlServerEscapeHelper.EscapeIdentifier(CatalogName);
-                }
-                TDSCommand += string.Format("exec {0}..{1} N'{2}.{3}'",
-                    CatalogName,
-                    TableCollationsStoredProc,
-                    SchemaName,
-                    TableName
-                );
+                CatalogName = SqlServerEscapeHelper.EscapeStringAsLiteral(SqlServerEscapeHelper.EscapeIdentifier(CatalogName));
             }
-            return TDSCommand;
+
+            string objectName = ADP.BuildMultiPartName(parts);
+            string escapedObjectName = SqlServerEscapeHelper.EscapeStringAsLiteral(objectName);
+            // Specify the column names explicitly. This is to ensure that we can map to hidden
+            // columns (e.g. columns in temporal tables.) If the target table doesn't exist,
+            // OBJECT_ID will return NULL and @Column_Names will remain non-null. The subsequent
+            // SELECT * query will then continue to fail with "Invalid object name" rather than with
+            // an unusual error because the query being executed is NULL.
+            //
+            // Some hidden columns (e.g. SQL Graph columns) cannot be selected, so we need to
+            // exclude them explicitly.  The graph_type values excluded below are internal graph
+            // columns that cannot be selected directly:
+            //
+            //   1 = GRAPH_ID
+            //   3 = GRAPH_FROM_ID
+            //   4 = GRAPH_FROM_OBJ_ID
+            //   6 = GRAPH_TO_ID
+            //   7 = GRAPH_TO_OBJ_ID
+            //
+            // See: https://learn.microsoft.com/sql/relational-databases/graphs/sql-graph-architecture#syscolumns
+            //
+            // The column-name query is built as dynamic SQL and executed via sp_executesql so
+            // that it is not compiled (and rejected) on SQL Server versions that lack the
+            // graph_type column (e.g. SQL 2016).  CatalogName and escapedObjectName are
+            // interpolated directly into the SQL string because SQL Server does not allow
+            // identifiers (database/schema/table names) to be passed as parameters.  Both
+            // values are escaped via SqlServerEscapeHelper before interpolation.
+            //
+            // SqlBulkCopy must remain compatible with Azure Synapse Analytics dedicated SQL pools
+            // and with SQL Server 2016. Azure Synapse Analytics does not allow variables assigned
+            // in the SELECT statement to appear in an expression, which prevents the consistent use of
+            //   SELECT @Column_Names = COALESCE(@Column_Names + ', ', '') + QUOTENAME([name])
+            // The alternative is to use STRING_AGG, but this was only introduced in SQL Server
+            // 2017. To meet both criteria, we review the EngineEdition server property. A value
+            // of 6 indicates that the bulk copy is going to run against Azure Synapse Analytics;
+            // we use STRING_AGG in that case and the COALESCE method otherwise.
+            //
+            // See: https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql
+            return $"""
+SELECT @@TRANCOUNT;
+
+DECLARE @Object_ID INT = OBJECT_ID('{escapedObjectName}');
+DECLARE @Column_Name_Query_SELECT NVARCHAR(MAX);
+DECLARE @Column_Name_Query_FILTER NVARCHAR(MAX);
+DECLARE @Column_Name_Query_SORT NVARCHAR(MAX);
+DECLARE @Column_Name_Query NVARCHAR(MAX);
+DECLARE @Column_Names NVARCHAR(MAX) = NULL;
+
+IF CAST(SERVERPROPERTY('EngineEdition') AS INT) = 6
+BEGIN
+    SET @Column_Name_Query_SELECT = N'SELECT @Column_Names = STRING_AGG(CAST(QUOTENAME([name]) AS NVARCHAR(MAX)), '', '') WITHIN GROUP (ORDER BY [column_id] ASC)';
+    SET @Column_Name_Query_SORT = N'';
+END
+ELSE
+BEGIN
+    SET @Column_Name_Query_SELECT = 'SELECT @Column_Names = COALESCE(@Column_Names + '', '', '''') + QUOTENAME([name])';
+    SET @Column_Name_Query_SORT = N'ORDER BY [column_id] ASC';
+END
+
+IF EXISTS (SELECT TOP 1 * FROM sys.all_columns WHERE [object_id] = OBJECT_ID('sys.all_columns') AND [name] = 'graph_type')
+BEGIN
+    SET @Column_Name_Query_FILTER = N'WHERE [object_id] = @Object_ID AND COALESCE([graph_type], 0) NOT IN (1, 3, 4, 6, 7)';
+END
+ELSE
+BEGIN
+    SET @Column_Name_Query_FILTER = N'WHERE [object_id] = @Object_ID';
+END
+SET @Column_Name_Query = @Column_Name_Query_SELECT + ' FROM {CatalogName}.[sys].[all_columns] ' + @Column_Name_Query_FILTER + ' ' + @Column_Name_Query_SORT + ';'
+
+EXEC sp_executesql @Column_Name_Query, N'@Object_ID INT, @Column_Names NVARCHAR(MAX) OUTPUT', @Object_ID = @Object_ID, @Column_Names = @Column_Names OUTPUT;
+SELECT @Column_Names = COALESCE(@Column_Names, '*');
+
+SET FMTONLY ON;
+EXEC(N'SELECT ' + @Column_Names + N' FROM {escapedObjectName}');
+SET FMTONLY OFF;
+
+EXEC {CatalogName}..{TableCollationsStoredProc} N'{SchemaName}.{TableName}';
+""";
         }
 
         // Creates and then executes initial query to get information about the targettable
@@ -485,6 +560,14 @@ namespace Microsoft.Data.SqlClient
         // We need to have a _parser.RunAsync to make it real async.
         private Task<BulkCopySimpleResultSet> CreateAndExecuteInitialQueryAsync(out BulkCopySimpleResultSet result)
         {
+            // Check if we have valid cached metadata for the current destination table
+            if (CachedMetadata != null)
+            {
+                SqlClientEventSource.Log.TryTraceEvent("SqlBulkCopy.CreateAndExecuteInitialQueryAsync | Info | Using cached metadata for table '{0}'", _destinationTableName);
+                result = CachedMetadata;
+                return null;
+            }
+
             string TDSCommand = CreateInitialQuery();
             SqlClientEventSource.Log.TryTraceEvent("SqlBulkCopy.CreateAndExecuteInitialQueryAsync | Info | Initial Query: '{0}'", TDSCommand);
             SqlClientEventSource.Log.TryCorrelationTraceEvent("SqlBulkCopy.CreateAndExecuteInitialQueryAsync | Info | Correlation | Object Id {0}, Activity Id {1}", ObjectID, ActivityCorrelator.Current);
@@ -494,6 +577,7 @@ namespace Microsoft.Data.SqlClient
             {
                 result = new BulkCopySimpleResultSet();
                 RunParser(result);
+                CacheMetadataIfEnabled(result);
                 return null;
             }
             else
@@ -511,17 +595,31 @@ namespace Microsoft.Data.SqlClient
                     {
                         var internalResult = new BulkCopySimpleResultSet();
                         RunParserReliably(internalResult);
+                        CacheMetadataIfEnabled(internalResult);
                         return internalResult;
                     }
                 }, TaskScheduler.Default);
             }
         }
 
+        private void CacheMetadataIfEnabled(BulkCopySimpleResultSet result)
+        {
+            if (IsCopyOption(SqlBulkCopyOptions.CacheMetadata))
+            {
+                CachedMetadata = result;
+                SqlClientEventSource.Log.TryTraceEvent("SqlBulkCopy.CacheMetadataIfEnabled | Info | Cached metadata for table '{0}'", _destinationTableName);
+            }
+        }
+
         // Matches associated columns with metadata from initial query.
         // Builds and executes the update bulk command.
-        private string AnalyzeTargetAndCreateUpdateBulkCommand(BulkCopySimpleResultSet internalResults)
+        // metaDataSet is passed in by the caller so that when CacheMetadata is enabled, the
+        // caller can supply a clone, allowing this method to null-prune unmatched/rejected
+        // columns freely without mutating the shared cache.
+        private string AnalyzeTargetAndCreateUpdateBulkCommand(BulkCopySimpleResultSet internalResults, _SqlMetaDataSet metaDataSet)
         {
             Debug.Assert(internalResults != null, "Where are the results from the initial query?");
+            Debug.Assert(metaDataSet != null, "metaDataSet must not be null");
 
             StringBuilder updateBulkCommandText = new StringBuilder();
 
@@ -530,7 +628,7 @@ namespace Microsoft.Data.SqlClient
                 throw SQL.BulkLoadNoCollation();
             }
 
-            string[] parts = MultipartIdentifier.ParseMultipartIdentifier(DestinationTableName, "[\"", "]\"", Strings.SQL_BulkCopyDestinationTableName, true);
+            string[] parts = MultipartIdentifier.ParseMultipartIdentifier(DestinationTableName, Strings.SQL_BulkCopyDestinationTableName, true);
             updateBulkCommandText.AppendFormat("insert bulk {0} (", ADP.BuildMultiPartName(parts));
 
             // Throw if there is a transaction but no flag is set
@@ -565,8 +663,9 @@ namespace Microsoft.Data.SqlClient
             // the next column in the command text.
             bool appendComma = false;
 
-            // Loop over the metadata for each result column.
-            _SqlMetaDataSet metaDataSet = internalResults[MetaDataResultId].MetaData;
+            // Loop over the metadata for each result column, null-pruning unmatched/rejected
+            // columns. metaDataSet is safe to mutate here — see the call site for clone logic.
+            _operationMetaData = metaDataSet;
             _sortedColumnMappings = new List<_ColumnMapping>(metaDataSet.Length);
             for (int i = 0; i < metaDataSet.Length; i++)
             {
@@ -574,7 +673,7 @@ namespace Microsoft.Data.SqlClient
 
                 bool matched = false;
                 bool rejected = false;
-                
+
                 // Look for a local match for the remote column.
                 for (int j = 0; j < _localColumnMappings.Count; ++j)
                 {
@@ -594,7 +693,7 @@ namespace Microsoft.Data.SqlClient
 
                     // Remove it from our unmatched set.
                     unmatchedColumns.Remove(localColumn.DestinationColumn);
-                    
+
                     // Check for column types that we refuse to bulk load, even
                     // though we found a match.
                     //
@@ -863,9 +962,16 @@ namespace Microsoft.Data.SqlClient
         {
             _stateObj.SetTimeoutSeconds(BulkCopyTimeout);
 
-            _SqlMetaDataSet metadataCollection = internalResults[MetaDataResultId].MetaData;
+            _SqlMetaDataSet metadataCollection = _operationMetaData ?? internalResults[MetaDataResultId].MetaData;
             _stateObj._outputMessageType = TdsEnums.MT_BULK;
             _parser.WriteBulkCopyMetaData(metadataCollection, _sortedColumnMappings.Count, _stateObj);
+        }
+
+        /// <include file='../../../../../../doc/snippets/Microsoft.Data.SqlClient/SqlBulkCopy.xml' path='docs/members[@name="SqlBulkCopy"]/ClearCachedMetadata/*'/>
+        public void ClearCachedMetadata()
+        {
+            CachedMetadata = null;
+            SqlClientEventSource.Log.TryTraceEvent("SqlBulkCopy.ClearCachedMetadata | Info | Metadata cache cleared");
         }
 
         // Terminates the bulk copy operation.
@@ -888,6 +994,8 @@ namespace Microsoft.Data.SqlClient
                 // Dispose dependent objects
                 _columnMappings = null;
                 _parser = null;
+                CachedMetadata = null;
+                _operationMetaData = null;
                 try
                 {
                     // Just in case there is a lingering transaction (which there shouldn't be)
@@ -1145,8 +1253,8 @@ namespace Microsoft.Data.SqlClient
             }
             else
             { // This will call Read for DataRows, DataTable and IDataReader (this includes all IDataReader except DbDataReader)
-              // Release lock to prevent possible deadlocks
-                SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+                // Release lock to prevent possible deadlocks
+                SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
                 bool semaphoreLock = internalConnection._parserLock.CanBeReleasedFromAnyThread;
                 internalConnection._parserLock.Release();
 
@@ -1355,7 +1463,7 @@ namespace Microsoft.Data.SqlClient
         private void RunParser(BulkCopySimpleResultSet bulkCopyHandler = null)
         {
             // In case of error while reading, we should let the connection know that we already own the _parserLock
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
 
             internalConnection.ThreadHasParserLockForClose = true;
             try
@@ -1373,15 +1481,12 @@ namespace Microsoft.Data.SqlClient
         private void RunParserReliably(BulkCopySimpleResultSet bulkCopyHandler = null)
         {
             // In case of error while reading, we should let the connection know that we already own the _parserLock
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
             internalConnection.ThreadHasParserLockForClose = true;
             try
             {
-                #if NETFRAMEWORK
-                _parser.RunReliably(RunBehavior.UntilDone, null, null, bulkCopyHandler, _stateObj);                
-                #else
+                // @TODO: CER Exception Handling was removed here (see GH#3581)
                 _parser.Run(RunBehavior.UntilDone, null, null, bulkCopyHandler, _stateObj);
-                #endif
             }
             finally
             {
@@ -1393,7 +1498,7 @@ namespace Microsoft.Data.SqlClient
         {
             if (_internalTransaction != null)
             {
-                SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+                SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
                 internalConnection.ThreadHasParserLockForClose = true; // In case of error, let the connection know that we have the lock
                 try
                 {
@@ -1414,7 +1519,7 @@ namespace Microsoft.Data.SqlClient
             {
                 if (!_internalTransaction.IsZombied)
                 {
-                    SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+                    SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
                     internalConnection.ThreadHasParserLockForClose = true; // In case of error, let the connection know that we have the lock
                     try
                     {
@@ -1444,7 +1549,10 @@ namespace Microsoft.Data.SqlClient
         private string UnquotedName(string name)
         {
             if (string.IsNullOrEmpty(name))
+            {
                 return null;
+            }
+
             if (name[0] == '[')
             {
                 int l = name.Length;
@@ -1649,9 +1757,9 @@ namespace Microsoft.Data.SqlClient
                     case TdsEnums.SQLJSON:
                         // Could be either string, SqlCachedBuffer, XmlReader or XmlDataFeed
                         Debug.Assert((value is XmlReader) || (value is SqlCachedBuffer) || (value is string) || (value is SqlString) || (value is XmlDataFeed), "Invalid value type of Xml datatype");
-                        if (value is XmlReader)
+                        if (value is XmlReader xmlReader)
                         {
-                            value = new XmlDataFeed((XmlReader)value);
+                            value = new XmlDataFeed(xmlReader);
                             typeChanged = true;
                             coercedToDataFeed = true;
                         }
@@ -1701,7 +1809,7 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-                
+
                 ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _dbDataReaderRowSource = reader;
@@ -1737,13 +1845,13 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-                
+
                 ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _sqlDataReaderRowSource = _rowSource as SqlDataReader;
                 _dbDataReaderRowSource = _rowSource as DbDataReader;
                 _rowSourceType = ValueSourceType.IDataReader;
-                
+
                 WriteRowSourceToServerAsync(reader.FieldCount, CancellationToken.None); //It returns null since _isAsyncBulkCopy = false;
             }
             finally
@@ -1859,7 +1967,7 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-                
+
                 ResetWriteToServerGlobalVariables();
                 if (rows.Length == 0)
                 {
@@ -1876,9 +1984,9 @@ namespace Microsoft.Data.SqlClient
                 _rowSourceType = ValueSourceType.RowArray;
                 _rowEnumerator = rows.GetEnumerator();
                 _isAsyncBulkCopy = true;
-                
+
                 // It returns Task since _isAsyncBulkCopy = true;
-                return WriteRowSourceToServerAsync(table.Columns.Count, cancellationToken); 
+                return WriteRowSourceToServerAsync(table.Columns.Count, cancellationToken);
             }
             finally
             {
@@ -1905,19 +2013,19 @@ namespace Microsoft.Data.SqlClient
             {
                 throw SQL.BulkLoadPendingOperation();
             }
-            
+
             SqlStatistics statistics = Statistics;
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-                
+
                 ResetWriteToServerGlobalVariables();
                 _rowSource = reader;
                 _sqlDataReaderRowSource = reader as SqlDataReader;
                 _dbDataReaderRowSource = reader;
                 _rowSourceType = ValueSourceType.DbDataReader;
                 _isAsyncBulkCopy = true;
-                
+
                 // It returns Task since _isAsyncBulkCopy = true;
                 return WriteRowSourceToServerAsync(reader.FieldCount, cancellationToken);
             }
@@ -1957,7 +2065,7 @@ namespace Microsoft.Data.SqlClient
                 _dbDataReaderRowSource = _rowSource as DbDataReader;
                 _rowSourceType = ValueSourceType.IDataReader;
                 _isAsyncBulkCopy = true;
-                
+
                 // It returns Task since _isAsyncBulkCopy = true;
                 return WriteRowSourceToServerAsync(reader.FieldCount, cancellationToken);
             }
@@ -1997,7 +2105,7 @@ namespace Microsoft.Data.SqlClient
             try
             {
                 statistics = SqlStatistics.StartTimer(Statistics);
-                
+
                 ResetWriteToServerGlobalVariables();
                 _rowStateToSkip = ((rowState == 0) || (rowState == DataRowState.Deleted)) ? DataRowState.Deleted : ~rowState | DataRowState.Deleted;
                 _rowSource = table;
@@ -2005,7 +2113,7 @@ namespace Microsoft.Data.SqlClient
                 _rowSourceType = ValueSourceType.DataTable;
                 _rowEnumerator = table.Rows.GetEnumerator();
                 _isAsyncBulkCopy = true;
-                
+
                 // It returns Task since _isAsyncBulkCopy = true;
                 return WriteRowSourceToServerAsync(table.Columns.Count, cancellationToken);
             }
@@ -2055,23 +2163,17 @@ namespace Microsoft.Data.SqlClient
 
             bool finishedSynchronously = true;
             _isBulkCopyingInProgress = true;
-            
+
             CreateOrValidateConnection(nameof(WriteToServer));
 
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
 
             Debug.Assert(_parserLock == null, "Previous parser lock not cleaned");
             _parserLock = internalConnection._parserLock;
             _parserLock.Wait(canReleaseFromAnyThread: _isAsyncBulkCopy);
 
-            TdsParser bestEffortCleanupTarget = null;
-
-            #if NETFRAMEWORK
-            RuntimeHelpers.PrepareConstrainedRegions();
-            #endif
             try
             {
-                bestEffortCleanupTarget = SqlInternalConnection.GetBestEffortCleanupTarget(_connection);
                 WriteRowSourceToServerCommon(columnCount); // This is common in both sync and async
                 Task resultTask = WriteToServerInternalAsync(ctoken); // resultTask is null for sync, but Task for async.
                 if (resultTask != null)
@@ -2107,26 +2209,7 @@ namespace Microsoft.Data.SqlClient
                 }
                 return null;
             }
-            catch (System.OutOfMemoryException e)
-            {
-                _connection.Abort(e);
-                throw;
-            }
-            catch (System.StackOverflowException e)
-            {
-                _connection.Abort(e);
-                throw;
-            }
-            catch (System.Threading.ThreadAbortException e)
-            {
-                _connection.Abort(e);
-
-                #if NETFRAMEWORK
-                SqlInternalConnection.BestEffortCleanup(bestEffortCleanupTarget);
-                #endif
-
-                throw;
-            }
+            // @TODO: CER Exception Handling was removed here (see GH#3581)
             finally
             {
                 _columnMappings.ReadOnly = false;
@@ -2236,7 +2319,7 @@ namespace Microsoft.Data.SqlClient
         private bool FireRowsCopiedEvent(long rowsCopied)
         {
             // Release lock to prevent possible deadlocks
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
             bool semaphoreLock = internalConnection._parserLock.CanBeReleasedFromAnyThread;
             internalConnection._parserLock.Release();
 
@@ -2339,7 +2422,9 @@ namespace Microsoft.Data.SqlClient
                 {
                     task = ReadWriteColumnValueAsync(i); //First reads and then writes one cell value. Task 'task' is completed when reading task and writing task both are complete.
                     if (task != null)
+                    {
                         break; //task != null means we have a pending read/write Task.
+                    }
                 }
                 if (task != null)
                 {
@@ -2373,7 +2458,10 @@ namespace Microsoft.Data.SqlClient
         // This is in its own method to avoid always allocating the lambda in CopyColumnsAsync
         private void CopyColumnsAsyncSetupContinuation(TaskCompletionSource<object> source, Task task, int i)
         {
-            AsyncHelper.ContinueTaskWithState(task, source, this,
+            AsyncHelper.ContinueTaskWithState(
+                task,
+                source,
+                state: this,
                 onSuccess: (object state) =>
                 {
                     SqlBulkCopy sqlBulkCopy = (SqlBulkCopy)state;
@@ -2385,9 +2473,7 @@ namespace Microsoft.Data.SqlClient
                     {
                         source.SetResult(null);
                     }
-                },
-                connectionToDoom: _connection.GetOpenTdsConnection()
-            );
+                });
         }
 
         // The notification logic.
@@ -2522,10 +2608,11 @@ namespace Microsoft.Data.SqlClient
                             }
                             resultTask = source.Task;
 
-                            AsyncHelper.ContinueTaskWithState(readTask, source, this,
-                                onSuccess: (object state) => ((SqlBulkCopy)state).CopyRowsAsync(i + 1, totalRows, cts, source),
-                                connectionToDoom: _connection.GetOpenTdsConnection()
-                            );
+                            AsyncHelper.ContinueTaskWithState(
+                                readTask,
+                                source,
+                                state: this,
+                                onSuccess: (object state) => ((SqlBulkCopy)state).CopyRowsAsync(i + 1, totalRows, cts, source));
                             return resultTask; // Associated task will be completed when all rows are copied to server/exception/cancelled.
                         }
                     }
@@ -2547,14 +2634,13 @@ namespace Microsoft.Data.SqlClient
                                 }
                                 else
                                 {
-                                    AsyncHelper.ContinueTaskWithState(readTask, source, sqlBulkCopy,
-                                        onSuccess: (object state2) => ((SqlBulkCopy)state2).CopyRowsAsync(i + 1, totalRows, cts, source),
-                                        connectionToDoom: _connection.GetOpenTdsConnection()
-                                    );
+                                    AsyncHelper.ContinueTaskWithState(
+                                        readTask,
+                                        source,
+                                        state: sqlBulkCopy,
+                                        onSuccess: (object state2) => ((SqlBulkCopy)state2).CopyRowsAsync(i + 1, totalRows, cts, source));
                                 }
-                            },
-                            connectionToDoom: _connection.GetOpenTdsConnection()
-                        );
+                            });
                         return resultTask;
                     }
                 }
@@ -2589,7 +2675,7 @@ namespace Microsoft.Data.SqlClient
                 while (_hasMoreRowToCopy)
                 {
                     //pre->before every batch: Transaction, BulkCmd and metadata are done.
-                    SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+                    SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
 
                     if (IsCopyOption(SqlBulkCopyOptions.UseInternalTransaction))
                     { //internal transaction is started prior to each batch if the Option is set.
@@ -2623,7 +2709,10 @@ namespace Microsoft.Data.SqlClient
                             source = new TaskCompletionSource<object>();
                         }
 
-                        AsyncHelper.ContinueTaskWithState(commandTask, source, this,
+                        AsyncHelper.ContinueTaskWithState(
+                            commandTask,
+                            source,
+                            state: this,
                             onSuccess: (object state) =>
                             {
                                 SqlBulkCopy sqlBulkCopy = (SqlBulkCopy)state;
@@ -2633,9 +2722,7 @@ namespace Microsoft.Data.SqlClient
                                     // Continuation finished sync, recall into CopyBatchesAsync to continue
                                     sqlBulkCopy.CopyBatchesAsync(internalResults, updateBulkCommandText, cts, source);
                                 }
-                            },
-                            connectionToDoom: _connection.GetOpenTdsConnection()
-                        );
+                            });
                         return source.Task;
                     }
                 }
@@ -2676,7 +2763,7 @@ namespace Microsoft.Data.SqlClient
 
                 // Load encryption keys now (if needed)
                 _parser.LoadColumnEncryptionKeys(
-                    internalResults[MetaDataResultId].MetaData,
+                    _operationMetaData ?? internalResults[MetaDataResultId].MetaData,
                     _connection);
 
                 Task task = CopyRowsAsync(0, _savedBatchSize, cts); // This is copying 1 batch of rows and setting _hasMoreRowToCopy = true/false.
@@ -2689,7 +2776,10 @@ namespace Microsoft.Data.SqlClient
                     {   // First time only
                         source = new TaskCompletionSource<object>();
                     }
-                    AsyncHelper.ContinueTaskWithState(task, source, this,
+                    AsyncHelper.ContinueTaskWithState(
+                        task,
+                        source,
+                        state: this,
                         onSuccess: (object state) =>
                         {
                             SqlBulkCopy sqlBulkCopy = (SqlBulkCopy)state;
@@ -2701,9 +2791,7 @@ namespace Microsoft.Data.SqlClient
                             }
                         },
                         onFailure: static (Exception _, object state) => ((SqlBulkCopy)state).CopyBatchesAsyncContinuedOnError(cleanupParser: false),
-                        onCancellation: static (object state) => ((SqlBulkCopy)state).CopyBatchesAsyncContinuedOnError(cleanupParser: true),
-                        connectionToDoom: _connection.GetOpenTdsConnection()
-                    );
+                        onCancellation: static (object state) => ((SqlBulkCopy)state).CopyBatchesAsyncContinuedOnError(cleanupParser: true));
 
                     return source.Task;
                 }
@@ -2750,7 +2838,10 @@ namespace Microsoft.Data.SqlClient
                         source = new TaskCompletionSource<object>();
                     }
 
-                    AsyncHelper.ContinueTaskWithState(writeTask, source, this,
+                    AsyncHelper.ContinueTaskWithState(
+                        writeTask,
+                        source,
+                        state: this,
                         onSuccess: (object state) =>
                         {
                             SqlBulkCopy sqlBulkCopy = (SqlBulkCopy)state;
@@ -2768,9 +2859,7 @@ namespace Microsoft.Data.SqlClient
                             // Always call back into CopyBatchesAsync
                             sqlBulkCopy.CopyBatchesAsync(internalResults, updateBulkCommandText, cts, source);
                         },
-                        onFailure: static (Exception _, object state) => ((SqlBulkCopy)state).CopyBatchesAsyncContinuedOnError(cleanupParser: false),
-                        connectionToDoom: _connection.GetOpenTdsConnection()
-                    );
+                        onFailure: static (Exception _, object state) => ((SqlBulkCopy)state).CopyBatchesAsyncContinuedOnError(cleanupParser: false));
                     return source.Task;
                 }
             }
@@ -2791,41 +2880,19 @@ namespace Microsoft.Data.SqlClient
         // Takes care of cleaning up the parser, stateObj and transaction when CopyBatchesAsync fails.
         private void CopyBatchesAsyncContinuedOnError(bool cleanupParser)
         {
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            if ((cleanupParser) && (_parser != null) && (_stateObj != null))
+            {
+                _parser._asyncWrite = false;
+                Task task = _parser.WriteBulkCopyDone(_stateObj);
+                Debug.Assert(task == null, "Write should not pend when error occurs");
+                RunParser();
+            }
 
-            #if NETFRAMEWORK
-            RuntimeHelpers.PrepareConstrainedRegions();
-            #endif
-            try
+            if (_stateObj != null)
             {
-                if ((cleanupParser) && (_parser != null) && (_stateObj != null))
-                {
-                    _parser._asyncWrite = false;
-                    Task task = _parser.WriteBulkCopyDone(_stateObj);
-                    Debug.Assert(task == null, "Write should not pend when error occurs");
-                    RunParser();
-                }
-
-                if (_stateObj != null)
-                {
-                    CleanUpStateObject();
-                }
+                CleanUpStateObject();
             }
-            catch (OutOfMemoryException)
-            {
-                internalConnection.DoomThisConnection();
-                throw;
-            }
-            catch (StackOverflowException)
-            {
-                internalConnection.DoomThisConnection();
-                throw;
-            }
-            catch (ThreadAbortException)
-            {
-                internalConnection.DoomThisConnection();
-                throw;
-            }
+            // @TODO: CER Exception Handling was removed here (see GH#3581)
 
             AbortTransaction();
         }
@@ -2869,7 +2936,14 @@ namespace Microsoft.Data.SqlClient
 
             try
             {
-                updateBulkCommandText = AnalyzeTargetAndCreateUpdateBulkCommand(internalResults);
+                // When CacheMetadata is enabled, internalResults IS the cached result set (see
+                // CreateAndExecuteInitialQueryAsync). Clone the metadata set so that
+                // AnalyzeTargetAndCreateUpdateBulkCommand can null-prune unmatched/rejected
+                // columns without mutating the cache across WriteToServer calls.
+                _SqlMetaDataSet metaDataSet = CachedMetadata != null
+                    ? internalResults[MetaDataResultId].MetaData.Clone()
+                    : internalResults[MetaDataResultId].MetaData;
+                updateBulkCommandText = AnalyzeTargetAndCreateUpdateBulkCommand(internalResults, metaDataSet);
 
                 if (_sortedColumnMappings.Count != 0)
                 {
@@ -2893,7 +2967,10 @@ namespace Microsoft.Data.SqlClient
                     {
                         source = new TaskCompletionSource<object>();
                     }
-                    AsyncHelper.ContinueTaskWithState(task, source, this,
+                    AsyncHelper.ContinueTaskWithState(
+                        task,
+                        source,
+                        state: this,
                         onSuccess: (object state) =>
                         {
                             SqlBulkCopy sqlBulkCopy = (SqlBulkCopy)state;
@@ -2936,9 +3013,7 @@ namespace Microsoft.Data.SqlClient
                                     }
                                 }
                             }
-                        },
-                        connectionToDoom: _connection.GetOpenTdsConnection()
-                    );
+                        });
                     return;
                 }
                 else
@@ -2994,7 +3069,7 @@ namespace Microsoft.Data.SqlClient
             _hasMoreRowToCopy = true;
             Task<BulkCopySimpleResultSet> internalResultsTask = null;
             BulkCopySimpleResultSet internalResults = new BulkCopySimpleResultSet();
-            SqlInternalConnectionTds internalConnection = _connection.GetOpenTdsConnection();
+            SqlConnectionInternal internalConnection = _connection.GetOpenTdsConnection();
             try
             {
                 _parser = _connection.Parser;
@@ -3039,11 +3114,11 @@ namespace Microsoft.Data.SqlClient
 
                         // No need to cancel timer since SqlBulkCopy creates specific task source for reconnection.
                         AsyncHelper.SetTimeoutExceptionWithState(
-                            completion: cancellableReconnectTS, 
+                            completion: cancellableReconnectTS,
                             timeout: BulkCopyTimeout,
                             state: _destinationTableName,
-                            onFailure: static state => 
-                                SQL.BulkLoadInvalidDestinationTable((string)state, SQL.CR_ReconnectTimeout()), 
+                            onFailure: static state =>
+                                SQL.BulkLoadInvalidDestinationTable((string)state, SQL.CR_ReconnectTimeout()),
                             cancellationToken: CancellationToken.None
                         );
 
@@ -3063,14 +3138,9 @@ namespace Microsoft.Data.SqlClient
                                 _parserLock.Wait(canReleaseFromAnyThread: true);
                                 WriteToServerInternalRestAsync(cts, source);
                             },
-                            connectionToAbort: _connection,
                             onFailure: static (_, state) => ((StrongBox<CancellationTokenRegistration>)state).Value.Dispose(),
                             onCancellation: static state => ((StrongBox<CancellationTokenRegistration>)state).Value.Dispose(),
-                            #if NET
                             exceptionConverter: ex => SQL.BulkLoadInvalidDestinationTable(_destinationTableName, ex)
-                            #else
-                            exceptionConverter: (ex, _) => SQL.BulkLoadInvalidDestinationTable(_destinationTableName, ex)
-                            #endif
                         );
                         return;
                     }
@@ -3119,10 +3189,11 @@ namespace Microsoft.Data.SqlClient
 
                 if (internalResultsTask != null)
                 {
-                    AsyncHelper.ContinueTaskWithState(internalResultsTask, source, this,
-                        onSuccess: (object state) => ((SqlBulkCopy)state).WriteToServerInternalRestContinuedAsync(internalResultsTask.Result, cts, source),
-                        connectionToDoom: _connection.GetOpenTdsConnection()
-                    );
+                    AsyncHelper.ContinueTaskWithState(
+                        internalResultsTask,
+                        source,
+                        state: this,
+                        onSuccess: (object state) => ((SqlBulkCopy)state).WriteToServerInternalRestContinuedAsync(internalResultsTask.Result, cts, source));
                 }
                 else
                 {
@@ -3203,9 +3274,7 @@ namespace Microsoft.Data.SqlClient
                             {
                                 sqlBulkCopy.WriteToServerInternalRestAsync(ctoken, source); // Passing the same completion which will be completed by the Callee.
                             }
-                        },
-                        connectionToDoom: _connection.GetOpenTdsConnection()
-                    );
+                        });
                     return resultTask;
                 }
             }
@@ -3222,12 +3291,13 @@ namespace Microsoft.Data.SqlClient
             }
             return resultTask;
         }
-        
+
         private void ResetWriteToServerGlobalVariables()
         {
             _dataTableSource = null;
             _dbDataReaderRowSource = null;
             _isAsyncBulkCopy = false;
+            _operationMetaData = null;
             _rowEnumerator = null;
             _rowSource = null;
             _rowSourceType = ValueSourceType.Unspecified;

@@ -28,6 +28,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         // Synapse: WAITFOR DELAY not supported [Parse error at line: 1, column: 1: Incorrect syntax near 'WAITFOR'.]
         [ConditionalTheory(typeof(DataTestUtility), nameof(DataTestUtility.AreConnStringsSetup), nameof(DataTestUtility.IsNotAzureSynapse))]
         [ClassData(typeof(AsyncTimeoutTestVariations))]
+        [Trait("Category", "flaky")]
         public static void TestDelayedAsyncTimeout(AsyncAPI api, string commonObj, int delayPeriod, bool marsEnabled) =>
             RunTest(api, commonObj, delayPeriod, marsEnabled);
 
@@ -192,16 +193,23 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             catch (SqlException e)
             {
                 if (!timeoutExExpected)
+                {
                     throw new Exception("Index " + index + " failed with: " + e.Message);
+                }
                 else
+                {
                     Assert.True(timeoutExExpected && e.Class == 11 && e.Number == -2);
+                }
             }
             finally
             {
                 if (cn != null)
                 {
                     if (useTransaction)
+                    {
                         tx.Commit();
+                    }
+
                     cn.Close();
                 }
             }

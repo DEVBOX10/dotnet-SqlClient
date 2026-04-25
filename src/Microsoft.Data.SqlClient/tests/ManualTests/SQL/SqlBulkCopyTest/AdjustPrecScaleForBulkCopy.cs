@@ -29,7 +29,9 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             Assert.Equal("12.3", value.ToString());
 
             value = BulkCopySqlDecimalToTable(new SqlDecimal(123.45), 10, 2, 4, 1);
-            if (appContextSwitches.TruncateScaledDecimal)
+            
+            bool? truncate = appContextSwitches.TruncateScaledDecimal;
+            if (truncate.HasValue && truncate.Value)
             {
                 Assert.Equal("123.4", value.ToString());
             }
@@ -43,7 +45,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         private static SqlDecimal BulkCopySqlDecimalToTable(SqlDecimal decimalValue, int sourcePrecision, int sourceScale, int targetPrecision, int targetScale)
         {
-            string tableName = DataTestUtility.GetUniqueNameForSqlServer("Table");
+            string tableName = DataTestUtility.GetLongName("Table");
             string connectionString = DataTestUtility.TCPConnectionString;
 
             SqlDecimal resultValue;

@@ -18,6 +18,7 @@ using Xunit;
 
 namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 {
+    [PlatformSpecific(TestPlatforms.Windows)]
     public class CertificateTest : IDisposable
     {
         #region Private Fields
@@ -31,7 +32,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         // InstanceName will get replaced with an instance name in the connection string
         private static string InstanceName = "MSSQLSERVER";
-        
+
         // s_instanceNamePrefix will get replaced with MSSQL$ is there is an instance name in connection string
         private static string InstanceNamePrefix = "";
 
@@ -50,9 +51,13 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 {
                     return $@"SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL15.{InstanceName}\MSSQLSERVER\SuperSocketNetLib";
                 }
-                if (DataTestUtility.IsSQL2016())
+                if (DataTestUtility.IsSQL2017())
                 {
                     return $@"SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL14.{InstanceName}\MSSQLSERVER\SuperSocketNetLib";
+                }
+                if (DataTestUtility.IsSQL2016())
+                {
+                    return $@"SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL13.{InstanceName}\MSSQLSERVER\SuperSocketNetLib";
                 }
                 return string.Empty;
             }
@@ -75,10 +80,11 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 SlashInstanceName = $"\\{InstanceName}";
             }
 
-            Assert.True(DataTestUtility.IsAdmin, "CertificateTest class needs to be run in Admin mode.");
-
-            CreateValidCertificate(s_fullPathToPowershellScript);
-            _thumbprint = Environment.GetEnvironmentVariable(ThumbPrintEnvName, EnvironmentVariableTarget.Machine);
+            if (IsAdmin())
+            {
+                CreateValidCertificate(s_fullPathToPowershellScript);
+                _thumbprint = Environment.GetEnvironmentVariable(ThumbPrintEnvName, EnvironmentVariableTarget.Machine);
+            }
         }
 
         private static bool IsLocalHost()
@@ -89,19 +95,18 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         }
 
         private static bool AreConnStringsSetup() => DataTestUtility.AreConnStringsSetup();
+        private static bool IsAdmin() => DataTestUtility.IsAdmin;
         private static bool IsNotAzureServer() => DataTestUtility.IsNotAzureServer();
         private static bool UseManagedSNIOnWindows() => DataTestUtility.UseManagedSNIOnWindows;
 
-        [ActiveIssue("31754")]
-        [ConditionalFact(nameof(AreConnStringsSetup), nameof(IsNotAzureServer), nameof(IsLocalHost))]
-        [PlatformSpecific(TestPlatforms.Windows)]
-        public void OpenningConnectionWithGoodCertificateTest()
+        [ConditionalFact(nameof(AreConnStringsSetup), nameof(IsNotAzureServer), nameof(IsLocalHost), nameof(IsAdmin))]
+        public void OpeningConnectionWithGoodCertificateTest()
         {
             SqlConnectionStringBuilder builder = new(DataTestUtility.TCPConnectionString);
 
             // confirm that ForceEncryption is enabled
-            using SqlConnection notEncryptedConnection = new(builder.ConnectionString);
             builder.Encrypt = SqlConnectionEncryptOption.Optional;
+            using SqlConnection notEncryptedConnection = new(builder.ConnectionString);
             notEncryptedConnection.Open();
             Assert.Equal(ConnectionState.Open, notEncryptedConnection.State);
 
@@ -122,10 +127,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         // Provided hostname in certificate are:
         // localhost, FQDN, Loopback IPv4: 127.0.0.1, IPv6: ::1
-        [ActiveIssue("31754")]
-        [ConditionalFact(nameof(AreConnStringsSetup), nameof(IsNotAzureServer), nameof(IsLocalHost))]
-        [PlatformSpecific(TestPlatforms.Windows)]
-        public void OpeningConnectionWitHNICTest()
+        [ConditionalFact(nameof(AreConnStringsSetup), nameof(IsNotAzureServer), nameof(IsLocalHost), nameof(IsAdmin))]
+        public void OpeningConnectionWithNicTest()
         {
             // Mandatory
             SqlConnectionStringBuilder builder = new(DataTestUtility.TCPConnectionString)
@@ -143,7 +146,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             Assert.Equal(ConnectionState.Open, connection.State);
 
             // Ipv6 however causes name mistmatch error
-            // In net6 Manged SNI does not check for SAN. Therefore Application using Net6 have to use FQDN as HNIC
+            // In net6 Manged SNI does not check for SAN. Therefore, Application using Net6 have to use FQDN as HNIC
             // According to above no other hostname in certificate than FQDN will work in net6 which is same as SubjectName in case of RemoteCertificateNameMismatch
             // Net7.0 the new API added by dotnet runtime will check SANS and then SubjectName
 
@@ -166,8 +169,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             }
         }
 
-        [ConditionalFact(nameof(AreConnStringsSetup), nameof(UseManagedSNIOnWindows), nameof(IsNotAzureServer), nameof(IsLocalHost))]
-        [PlatformSpecific(TestPlatforms.Windows)]
+        [ConditionalFact(nameof(AreConnStringsSetup), nameof(UseManagedSNIOnWindows), nameof(IsNotAzureServer), nameof(IsLocalHost), nameof(IsAdmin))]
         public void RemoteCertificateNameMismatchErrorTest()
         {
             SqlConnectionStringBuilder builder = new(DataTestUtility.TCPConnectionString)
@@ -198,7 +200,9 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     RedirectStandardError = true,
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
-                    Arguments = $"{script} -Prefix {InstanceNamePrefix} -Instance {InstanceName}",
+                    Arguments = string.IsNullOrEmpty(InstanceNamePrefix)
+                        ? $"{script} -Instance \"{InstanceName}\""
+                        : $"{script} -Prefix \"{InstanceNamePrefix}\" -Instance \"{InstanceName}\"",
                     CreateNoWindow = false,
                     Verb = "runas"
                 }
@@ -226,7 +230,12 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     proc.Kill();
                     // allow async output to process
                     proc.WaitForExit(2000);
-                    throw new Exception($"Could not generate certificate.Error out put: {output}");
+                    throw new Exception($"Could not generate certificate. Error output: {output}");
+                }
+
+                if (proc.ExitCode != 0)
+                {
+                    throw new Exception($"Certificate generation script failed with exit code {proc.ExitCode}. Output: {output}");
                 }
             }
             else
@@ -254,6 +263,11 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         private void RemoveCertificate()
         {
+            if (string.IsNullOrEmpty(_thumbprint))
+            {
+                return;
+            }
+
             using X509Store certStore = new(StoreName.Root, StoreLocation.LocalMachine);
             certStore.Open(OpenFlags.ReadWrite);
             X509Certificate2Collection certCollection = certStore.Certificates.Find(X509FindType.FindByThumbprint, _thumbprint, false);

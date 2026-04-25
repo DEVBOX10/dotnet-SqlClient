@@ -12,8 +12,10 @@ using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
 using Microsoft.Data.SqlClient.ManualTesting.Tests.DataCommon;
+using Microsoft.SqlServer.TDS.Servers;
 using Microsoft.Win32;
 using Xunit;
+#nullable enable
 
 namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 {
@@ -47,9 +49,13 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 using WindowsIdentity identity = WindowsIdentity.GetCurrent();
                 WindowsPrincipal principal = new(identity);
                 if (principal.IsInRole(WindowsBuiltInRole.Administrator))
+                {
                     s_windowsAdmin = true;
+                }
                 else
+                {
                     s_windowsAdmin = false;
+                }
             }
 
             if (!Directory.Exists(s_fullPathToClientCert))
@@ -83,7 +89,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 {
                     return $@"SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL15.{s_instanceName}\MSSQLSERVER\SuperSocketNetLib";
                 }
-                if (DataTestUtility.IsSQL2016())
+                if (DataTestUtility.IsSQL2017())
                 {
                     return $@"SOFTWARE\Microsoft\Microsoft SQL Server\MSSQL14.{s_instanceName}\MSSQLSERVER\SuperSocketNetLib";
                 }
@@ -129,18 +135,19 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
             string userId = string.IsNullOrWhiteSpace(builder.UserID) ? "user" : builder.UserID;
             string password = string.IsNullOrWhiteSpace(builder.Password) ? "password" : builder.Password;
 
-            using TestTdsServer server = TestTdsServer.StartTestServer(enableFedAuth: false, enableLog: false, connectionTimeout: 15,
-                methodName: "",
-#if NET9_0_OR_GREATER
-                X509CertificateLoader.LoadPkcs12FromFile(s_fullPathToPfx, "nopassword", X509KeyStorageFlags.UserKeySet),
-#else
-                new X509Certificate2(s_fullPathToPfx, "nopassword", X509KeyStorageFlags.UserKeySet),
-#endif
-                encryptionProtocols: connectionTestParameters.EncryptionProtocols,
-                encryptionType: connectionTestParameters.TdsEncryptionType);
-
-            builder = new(server.ConnectionString)
+            using TdsServer server = new TdsServer(new TdsServerArguments
             {
+                EncryptionCertificate = GetEncryptionCertificate(s_fullPathToPfx, "nopassword", X509KeyStorageFlags.UserKeySet),
+                EncryptionProtocols = connectionTestParameters.EncryptionProtocols,
+                Encryption = connectionTestParameters.TdsEncryptionType,
+            });
+
+            server.Start();
+
+            builder = new()
+            {
+                DataSource = $"localhost,{server.EndPoint.Port}",
+                ConnectTimeout = 15,
                 UserID = userId,
                 Password = password,
                 TrustServerCertificate = connectionTestParameters.TrustServerCertificate,
@@ -172,63 +179,76 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         private static void RunPowershellScript(string script)
         {
             string currentDirectory = Directory.GetCurrentDirectory();
-            string powerShellCommand = "powershell.exe";
-            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            string powerShellCommand =
+              RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+              ? "powershell.exe"
+              : "pwsh";
+
+            if (! File.Exists(script))
             {
-                powerShellCommand = "pwsh";
+                throw new Exception($"Script {script} does not exist");
             }
 
-            if (File.Exists(script))
+            StringBuilder output = new();
+            Process proc = new()
             {
-                StringBuilder output = new();
-                Process proc = new()
+                StartInfo =
                 {
-                    StartInfo =
-                    {
-                        FileName = powerShellCommand,
-                        RedirectStandardError = true,
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        Arguments = $"{script} -OutDir {currentDirectory} > result.txt",
-                        CreateNoWindow = false,
-                        Verb = "runas"
-                    }
-                };
-
-                proc.EnableRaisingEvents = true;
-
-                proc.OutputDataReceived += new DataReceivedEventHandler((sender, e) =>
-                {
-                    if (e.Data != null)
-                    {
-                        output.AppendLine(e.Data);
-                    }
-                });
-
-                proc.ErrorDataReceived += new DataReceivedEventHandler((sender, e) =>
-                {
-                    if (e.Data != null)
-                    {
-                        output.AppendLine(e.Data);
-                    }
-                });
-
-                proc.Start();
-
-                proc.BeginOutputReadLine();
-                proc.BeginErrorReadLine();
-
-                if (!proc.WaitForExit(60000))
-                {
-                    proc.Kill();
-                    proc.WaitForExit(2000);
-                    throw new Exception($"Could not generate certificate. Error output: {output}");
+                    FileName = powerShellCommand,
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    Arguments = $"{script} -OutDir {currentDirectory}",
+                    CreateNoWindow = false,
+                    Verb = "runas"
                 }
-            }
-            else
+            };
+
+            proc.EnableRaisingEvents = true;
+
+            proc.OutputDataReceived += new DataReceivedEventHandler((sender, e) =>
             {
-                throw new Exception($"Could not find makepfxcert.ps1");
+                if (e.Data != null)
+                {
+                    output.AppendLine($"[OUT] {e.Data}");
+                }
+            });
+
+            proc.ErrorDataReceived += new DataReceivedEventHandler((sender, e) =>
+            {
+                if (e.Data != null)
+                {
+                    output.AppendLine($"[ERR] {e.Data}");
+                }
+            });
+
+            proc.Start();
+
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
+
+            if (!proc.WaitForExit(60000))
+            {
+                proc.Kill();
+                proc.WaitForExit(2000);
+                throw new Exception($"Could not generate certificate; script output: {output}");
             }
+        }
+
+        /// <summary>
+        /// Loads the specified certificate.
+        /// </summary>
+        /// <param name="fileName">The full path of the certificate.</param>
+        /// <param name="password">The certificate's password.</param>
+        /// <param name="keyStorageFlags">Key storage flags to apply when loading the certificate</param>
+        /// <returns>An <see cref="X509Certificate2"/> instance.</returns>
+        private X509Certificate2 GetEncryptionCertificate(string fileName, string? password, X509KeyStorageFlags keyStorageFlags)
+        {
+#if NET9_0_OR_GREATER
+            return X509CertificateLoader.LoadPkcs12FromFile(fileName, password, keyStorageFlags);
+#else
+            return new X509Certificate2(fileName, password, keyStorageFlags);
+#endif
         }
 
         private void RemoveCertificate()
@@ -249,7 +269,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         private static void RemoveForceEncryptionFromRegistryPath(string registryPath)
         {
-            RegistryKey key = Registry.LocalMachine.OpenSubKey(registryPath, true);
+            RegistryKey? key = Registry.LocalMachine.OpenSubKey(registryPath, true);
             key?.SetValue("ForceEncryption", 0, RegistryValueKind.DWord);
             key?.SetValue("Certificate", "", RegistryValueKind.String);
             ServiceController sc = new($"{s_instanceNamePrefix}{s_instanceName}");

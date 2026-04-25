@@ -4,17 +4,18 @@
 
 using System;
 using System.Diagnostics.Tracing;
+using Microsoft.Data.SqlClient.Internal;
 
 #if NET
 using System.Threading;
 #else
+#if _WINDOWS
 using Interop.Windows.Kernel32;
+#endif
 using Microsoft.Data.Common;
 
 using System.Diagnostics;
 using System.Reflection;
-using System.Runtime.ConstrainedExecution;
-using System.Runtime.Versioning;
 using System.Security.Permissions;
 #endif
 
@@ -92,7 +93,7 @@ namespace Microsoft.Data.SqlClient.Diagnostics
         private string? _instanceName;
 #endif
 
-        public SqlClientMetrics(SqlClientEventSource eventSource)
+        public SqlClientMetrics(SqlClientEventSource eventSource, bool enableMetrics)
         {
             _eventSource = eventSource;
 
@@ -100,6 +101,11 @@ namespace Microsoft.Data.SqlClient.Diagnostics
             // On .NET Framework, metrics are exposed as performance counters and are always enabled.
             // On .NET Core, metrics are exposed as EventCounters, and require explicit enablement.
             EnablePerformanceCounters();
+#else
+            if (enableMetrics)
+            {
+                EnableEventCounters();
+            }
 #endif
         }
 
@@ -451,13 +457,11 @@ namespace Microsoft.Data.SqlClient.Diagnostics
             }
         }
 
-        [PrePrepareMethod]
         private void ExitOrUnloadEventHandler(object sender, EventArgs e)
         {
             RemovePerformanceCounters();
         }
 
-        [PrePrepareMethod]
         private void ExceptionEventHandler(object sender, UnhandledExceptionEventArgs e)
         {
             if (e != null && e.IsTerminating)
@@ -466,7 +470,6 @@ namespace Microsoft.Data.SqlClient.Diagnostics
             }
         }
 
-        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.MayFail)]
         private void RemovePerformanceCounters()
         {
             // ExceptionEventHandler with IsTerminating may be called before
@@ -489,31 +492,27 @@ namespace Microsoft.Data.SqlClient.Diagnostics
 
         private PerformanceCounter? CreatePerformanceCounter(string counterName, PerformanceCounterType counterType)
         {
-            PerformanceCounter? instance = null;
-
             _instanceName ??= GetInstanceName();
             try
             {
-                instance = new PerformanceCounter();
+                PerformanceCounter instance = new();
                 instance.CategoryName = PerformanceCounterCategoryName;
                 instance.CounterName = counterName;
                 instance.InstanceName = _instanceName;
                 instance.InstanceLifetime = PerformanceCounterInstanceLifetime.Process;
                 instance.ReadOnly = false;
                 instance.RawValue = 0;  // make sure we start out at zero
+
+                return instance;
             }
             catch (InvalidOperationException e)
             {
                 ADP.TraceExceptionWithoutRethrow(e);
-            }
 
-            return instance;
+                return null;
+            }
         }
 
-        // SxS: this method uses GetCurrentProcessId to construct the instance name.
-        // TODO: VSDD 534795 - remove the Resource* attributes if you do not use GetCurrentProcessId after the fix
-        [ResourceExposure(ResourceScope.None)]
-        [ResourceConsumption(ResourceScope.Process, ResourceScope.Process)]
         private static string GetInstanceName()
         {
             string result;
@@ -524,7 +523,6 @@ namespace Microsoft.Data.SqlClient.Diagnostics
                 instanceName = AppDomain.CurrentDomain?.FriendlyName;
             }
 
-            // TODO: If you do not use GetCurrentProcessId after fixing VSDD 534795, please remove Resource* attributes from this method
             int pid = Kernel32Safe.GetCurrentProcessId();
 
             // SQLBUDT #366157 -there are several characters which have special meaning

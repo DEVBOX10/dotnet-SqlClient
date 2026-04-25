@@ -15,8 +15,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
     /// </summary>
     public sealed class TestBulkCopyWithUtf8 : IDisposable
     {
-        private static string s_sourceTable = DataTestUtility.GetUniqueName("SourceTableForUTF8Data");
-        private static string s_destinationTable = DataTestUtility.GetUniqueName("DestinationTableForUTF8Data");
+        private static string s_sourceTable = DataTestUtility.GetShortName("SourceTableForUTF8Data");
+        private static string s_destinationTable = DataTestUtility.GetShortName("DestinationTableForUTF8Data");
         private static string s_testValue = "test";
         private static byte[] s_testValueInUtf8Bytes = new byte[] { 0x74, 0x65, 0x73, 0x74 };
         private static readonly string s_insertQuery = $"INSERT INTO {s_sourceTable} VALUES('{s_testValue}')";
@@ -26,6 +26,13 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         /// </summary>
         public TestBulkCopyWithUtf8()
         {
+            // xUnit instantiates the class even when ConditionalTheory conditions cause the
+            // test to be skipped, so we must guard setup that requires UTF-8 collations.
+            if (!DataTestUtility.IsAtLeastSQL2019())
+            {
+                return;
+            }
+
             using SqlConnection sourceConnection = new SqlConnection(GetConnectionString(true));
             sourceConnection.Open();
             SetupTables(sourceConnection, s_sourceTable, s_destinationTable, s_insertQuery);
@@ -36,6 +43,12 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         /// </summary>
         public void Dispose()
         {
+            // Guard matches the constructor: no tables were created on older SQL versions.
+            if (!DataTestUtility.IsAtLeastSQL2019())
+            {
+                return;
+            }
+
             using SqlConnection connection = new SqlConnection(GetConnectionString(true));
             connection.Open();
             DataTestUtility.DropTable(connection, s_sourceTable);
@@ -56,7 +69,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
 
         /// <summary>
         /// Creates source and destination tables with a varchar(max) column with a collation setting
-        /// that stores the data in UTF8 encoding and inserts the data in the source table. 
+        /// that stores the data in UTF8 encoding and inserts the data in the source table.
         /// </summary>
         private void SetupTables(SqlConnection connection, string sourceTable, string destinationTable, string insertQuery)
         {
@@ -75,7 +88,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ConditionalTheory(typeof(DataTestUtility),
          nameof(DataTestUtility.AreConnStringsSetup),
          nameof(DataTestUtility.IsNotAzureServer),
-         nameof(DataTestUtility.IsNotAzureSynapse))]
+         nameof(DataTestUtility.IsNotAzureSynapse),
+         nameof(DataTestUtility.IsAtLeastSQL2019))]
         [InlineData(true, true)]
         [InlineData(false, true)]
         [InlineData(true, false)]
@@ -139,7 +153,8 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
         [ConditionalTheory(typeof(DataTestUtility),
          nameof(DataTestUtility.AreConnStringsSetup),
          nameof(DataTestUtility.IsNotAzureServer),
-         nameof(DataTestUtility.IsNotAzureSynapse))]
+         nameof(DataTestUtility.IsNotAzureSynapse),
+         nameof(DataTestUtility.IsAtLeastSQL2019))]
         [InlineData(true, true)]
         [InlineData(false, true)]
         [InlineData(true, false)]

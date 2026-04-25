@@ -223,7 +223,9 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                     {
                         rows1++;
                         if (rows1 == rowCount / 2)
+                        {
                             break;
+                        }
                     }
                     Assert.True(rows1 == rowCount / 2, "MARSSyncBusyReaderTest Failure, #1");
 
@@ -234,7 +236,9 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                         {
                             rows2++;
                             if (rows2 == rowCount / 2)
+                            {
                                 break;
+                            }
                         }
                         Assert.True(rows2 == rowCount / 2, "MARSSyncBusyReaderTest Failure, #2");
 
@@ -587,7 +591,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 {
                     using (SqlDataReader reader1 = command.ExecuteReader())
                     {
-                        DataTestUtility.AssertThrowsWrapper<InvalidOperationException>(() =>
+                        DataTestUtility.AssertThrows<InvalidOperationException>(() =>
                         {
                             SqlDataReader reader2 = command.ExecuteReader();
                         }, openReaderExistsMessage);
@@ -607,7 +611,7 @@ namespace Microsoft.Data.SqlClient.ManualTesting.Tests
                 {
                     using (SqlDataReader reader1 = command1.ExecuteReader())
                     {
-                        DataTestUtility.AssertThrowsWrapper<InvalidOperationException>(() =>
+                        DataTestUtility.AssertThrows<InvalidOperationException>(() =>
                         {
                             SqlDataReader reader2 = command2.ExecuteReader();
                         }, openReaderExistsMessage);

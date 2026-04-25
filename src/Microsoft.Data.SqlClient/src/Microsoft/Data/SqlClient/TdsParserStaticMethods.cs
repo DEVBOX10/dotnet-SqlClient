@@ -5,7 +5,6 @@
 using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using Microsoft.Data.Common;
 
 namespace Microsoft.Data.SqlClient
@@ -18,9 +17,6 @@ namespace Microsoft.Data.SqlClient
         // Static methods
         //
 
-        // SxS: this method accesses registry to resolve the alias.
-        [ResourceExposure(ResourceScope.None)]
-        [ResourceConsumption(ResourceScope.Machine, ResourceScope.Machine)]
         static internal void AliasRegistryLookup(ref string host, ref string protocol)
         {
             if (!string.IsNullOrEmpty(host))
@@ -100,6 +96,10 @@ namespace Microsoft.Data.SqlClient
         //       If this logic changed, SNIPacketSetData needs to be changed as well
         internal static byte[] ObfuscatePassword(string password)
         {
+            if (string.IsNullOrEmpty(password))
+            {
+                return Array.Empty<byte>();
+            }
             byte[] bObfuscated = new byte[password.Length << 1];
             int s;
             byte bLo;
@@ -118,6 +118,10 @@ namespace Microsoft.Data.SqlClient
 
         internal static byte[] ObfuscatePassword(byte[] password)
         {
+            if (password == null || password.Length == 0)
+            {
+                return Array.Empty<byte>();
+            }
             byte bLo;
             byte bHi;
 
@@ -160,8 +164,6 @@ namespace Microsoft.Data.SqlClient
 
         private static byte[] s_nicAddress = null;
 
-        [ResourceExposure(ResourceScope.None)] // SxS: we use MAC address for TDS login only
-        [ResourceConsumption(ResourceScope.Machine, ResourceScope.Machine)]
         static internal byte[] GetNetworkPhysicalAddressForTdsLoginOnly()
         {
             if (s_nicAddress != null)
